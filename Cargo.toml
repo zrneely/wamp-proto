@@ -1,0 +1,23 @@
+[package]
+name = "wamp-proto"
+version = "0.1.0"
+authors = ["Zachary Neely <zrussellneely@gmail.com>"]
+
+[dependencies]
+chrono = "0.4"
+failure = "0.1"
+failure_derive = "0.1"
+futures = "0.1"
+lazy_static = "1"
+rand = "0.4"
+regex = "0.2"
+serde = "1"
+tokio-timer = "0.1"
+websocket = { version = "0.20", optional = true }
+
+[features]
+default = ["callee", "caller", "publisher", "subscriber", "websocket"]
+callee = []
+caller = []
+publisher = []
+subscriber = []

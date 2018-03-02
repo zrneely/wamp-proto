@@ -1,0 +1,98 @@
+ Documenting openssl v0.9.24
+thread 'rustc' panicked at 'Unexpected type DefId(14/0:31 ~ libc[5c4e]::c_int[0])', librustdoc/clean/auto_trait.rs:29:18
+stack backtrace:
+   0:     0x7fe2b498b093 - std::sys::unix::backtrace::tracing::imp::unwind_backtrace::h0d6340fe15d98aed
+                               at libstd/sys/unix/backtrace/tracing/gcc_s.rs:49
+   1:     0x7fe2b49825d4 - std::sys_common::backtrace::_print::h973f75e26aeddba1
+                               at libstd/sys_common/backtrace.rs:71
+   2:     0x7fe2b4987d1d - std::panicking::default_hook::{{closure}}::had4ed1cd0dcd509b
+                               at libstd/sys_common/backtrace.rs:59
+                               at libstd/panicking.rs:206
+   3:     0x7fe2b4987a19 - std::panicking::default_hook::habea09c5841fbde4
+                               at libstd/panicking.rs:222
+   4:     0x7fe2b498817f - std::panicking::rust_panic_with_hook::h81aa7ad0546bb3c8
+                               at libstd/panicking.rs:400
+   5:     0x7fe2b4987fa2 - std::panicking::begin_panic_fmt::head4b5466d1d35c4
+                               at libstd/panicking.rs:347
+   6:     0x7fe2b979f4db - rustdoc::clean::get_auto_traits_with_def_id::h53058e1cbbc6ddd0
+                               at librustdoc/clean/auto_trait.rs:29
+                               at librustdoc/clean/mod.rs:3372
+   7:     0x7fe2b9762dbe - rustdoc::clean::inline::build_impls::h747e290e42e1c2b3
+                               at librustdoc/clean/inline.rs:246
+   8:     0x7fe2b97a03f6 - rustdoc::clean::build_deref_target_impls::ha895b0f76852873e
+                               at librustdoc/clean/mod.rs:3431
+   9:     0x7fe2b979f7fd - <rustdoc::doctree::Impl as rustdoc::clean::Clean<alloc::vec::Vec<rustdoc::clean::Item>>>::clean::h9f627793424c1575
+                               at librustdoc/clean/mod.rs:3384
+  10:     0x7fe2b97818fa - <rustdoc::doctree::Module as rustdoc::clean::Clean<rustdoc::clean::Item>>::clean::hb9ac5ed5b3471130
+                               at librustdoc/clean/mod.rs:541
+                               at /checkout/src/libcore/ops/function.rs:271
+                               at /checkout/src/libcore/option.rs:404
+                               at /checkout/src/libcore/iter/mod.rs:1311
+                               at /checkout/src/libcore/iter/mod.rs:2603
+                               at /checkout/src/libcore/iter/mod.rs:2440
+                               at /checkout/src/liballoc/vec.rs:1906
+                               at /checkout/src/liballoc/vec.rs:1803
+                               at /checkout/src/liballoc/vec.rs:1767
+                               at librustdoc/clean/mod.rs:541
+  11:     0x7fe2b972e1c5 - <alloc::vec::Vec<T> as alloc::vec::SpecExtend<T, I>>::spec_extend::hfd50267331f49f94
+                               at librustdoc/clean/mod.rs:536
+                               at /checkout/src/libcore/ops/function.rs:271
+                               at /checkout/src/libcore/option.rs:404
+                               at /checkout/src/libcore/iter/mod.rs:1311
+                               at /checkout/src/liballoc/vec.rs:1829
+  12:     0x7fe2b97813f2 - <rustdoc::doctree::Module as rustdoc::clean::Clean<rustdoc::clean::Item>>::clean::hb9ac5ed5b3471130
+                               at /checkout/src/liballoc/vec.rs:1767
+                               at librustdoc/clean/mod.rs:536
+  13:     0x7fe2b977d0cd - <rustdoc::visit_ast::RustdocVisitor<'a, 'tcx, 'rcx> as rustdoc::clean::Clean<rustdoc::clean::Crate>>::clean::hab4ff3967b917dfc
+                               at librustdoc/clean/mod.rs:166
+  14:     0x7fe2b97a9aab - rustdoc::core::run_core::{{closure}}::h2127a7d2194e2512
+                               at librustdoc/core.rs:274
+  15:     0x7fe2b96d9e9e - rustc::ty::context::TyCtxt::create_and_enter::h83a891619ee7ae59
+                               at /checkout/src/librustc_driver/driver.rs:1094
+                               at /checkout/src/librustc/ty/context.rs:1573
+                               at /checkout/src/libstd/thread/local.rs:377
+                               at /checkout/src/libstd/thread/local.rs:288
+                               at /checkout/src/librustc/ty/context.rs:1570
+                               at /checkout/src/librustc/ty/context.rs:1557
+                               at /checkout/src/libstd/thread/local.rs:377
+                               at /checkout/src/libstd/thread/local.rs:288
+                               at /checkout/src/librustc/ty/context.rs:1554
+                               at /checkout/src/librustc/ty/context.rs:1197
+  16:     0x7fe2b97a8446 - rustdoc::core::run_core::h424b9ba4e87acf5b
+                               at /checkout/src/librustc_driver/driver.rs:1007
+                               at librustdoc/core.rs:220
+  17:     0x7fe2b965f007 - std::sys_common::backtrace::__rust_begin_short_backtrace::he305a85c179bcf1c
+                               at librustdoc/lib.rs:552
+                               at /checkout/src/librustc_driver/lib.rs:1441
+                               at /checkout/src/libstd/sys_common/backtrace.rs:136
+  18:     0x7fe2b9662acd - std::panicking::try::do_call::h6623c38c7c0eac5c
+                               at /checkout/src/libstd/thread/mod.rs:406
+                               at /checkout/src/libstd/panic.rs:296
+                               at /checkout/src/libstd/panicking.rs:305
+  19:     0x7fe2b49a0c7e - __rust_maybe_catch_panic
+                               at libpanic_unwind/lib.rs:102
+  20:     0x7fe2b96bc365 - <F as alloc::boxed::FnBox<A>>::call_box::h2c7d4cedf24d3a1d
+                               at /checkout/src/libstd/panicking.rs:284
+                               at /checkout/src/libstd/panic.rs:361
+                               at /checkout/src/libstd/thread/mod.rs:405
+                               at /checkout/src/liballoc/boxed.rs:783
+  21:     0x7fe2b499803b - std::sys::unix::thread::Thread::new::thread_start::h0cb04fb27e7ee6cc
+                               at /checkout/src/liballoc/boxed.rs:793
+                               at libstd/sys_common/thread.rs:24
+                               at libstd/sys/unix/thread.rs:90
+  22:     0x7fe2b46f76b9 - start_thread
+  23:     0x7fe2b420741c - clone
+  24:                0x0 - <unknown>
+
+error: internal compiler error: unexpected panic
+
+note: the compiler unexpectedly panicked. this is a bug.
+
+note: we would appreciate a bug report: https://github.com/rust-lang/rust/blob/master/CONTRIBUTING.md#bug-reports
+
+note: rustc 1.26.0-nightly (29f5c699b 2018-02-27) running on x86_64-unknown-linux-gnu
+
+error: Could not document `openssl`.
+
+Caused by:
+  process didn't exit successfully: `rustdoc --crate-name openssl /home/zrneely/.cargo/registry/src/github.com-1ecc6299db9ec823/openssl-0.9.24/src/lib.rs -o /home/zrneely/wamp-proto/target/doc -L dependency=/home/zrneely/wamp-proto/target/debug/deps --extern bitflags=/home/zrneely/wamp-proto/target/debug/deps/libbitflags-e3b276b67bc76bae.rlib --extern lazy_static=/home/zrneely/wamp-proto/target/debug/deps/liblazy_static-97e5c761b8617c8c.rlib --extern foreign_types=/home/zrneely/wamp-proto/target/debug/deps/libforeign_types-4068b27912ce0275.rlib --extern openssl_sys=/home/zrneely/wamp-proto/target/debug/deps/libopenssl_sys-9eccb0fadc07c73b.rlib --extern libc=/home/zrneely/wamp-proto/target/debug/deps/liblibc-c1fd7b302bcb828f.rlib --cfg ossl102 --cfg ossl10x --cfg osslconf="OPENSSL_NO_KRB5" --cfg osslconf="OPENSSL_NO_RFC3779"` (exit code: 101)
