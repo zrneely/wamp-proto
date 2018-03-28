@@ -1,14 +1,24 @@
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use failure::Error;
-use futures::{future, Future};
-use tokio_timer;
+use futures::{Future, FutureExt};
+use parking_lot::Mutex;
+//use tokio_timer;
 
-use {Id, GlobalScope, RouterScope, Uri, TransportableValue as TV, WampTransport};
+use {Id, IncomingValues, GlobalScope, RouterScope, Uri, TransportableValue as TV, Transport};
 use error::WampError;
-use proto::{TxMessage, RxMessage};
+
+mod initialize;
+#[cfg(feature = "subscriber")]
+mod subscribe;
+
+#[cfg(feature = "subscriber")]
+pub use self::subscribe::Subscription;
+
+use self::subscribe::BroadcastHandler;
 
 lazy_static! {
     // Just accept the defaults; performance could degrade very slightly if any timeout is set to
@@ -16,100 +26,41 @@ lazy_static! {
     static ref TIMER: tokio_timer::Timer = tokio_timer::wheel().build();
 }
 
-/// A factory for WAMP clients.
-///
-/// This is a typestate for a client which has not yet initialized its connection to a router.
-pub struct ClientBuilder<T: WampTransport> {
-    transport: T,
-    timeout: Duration,
-}
-impl<T: WampTransport> ClientBuilder<T> {
-    /// Creates a client builder which will connect to the given URL using a provider of the
-    /// specified type.
-    pub fn open_transport(url: &str) -> impl Future<Item=Self> {
-        let transport_future = T::connect(url);
-        transport_future.map(|transport| ClientBuilder {
-            transport,
-            timeout: Duration::from_secs(30),
-        })
-    }
-
-    /// Changes the client's timeout value for protocol-level IO. The default value is 30 seconds.
-    ///
-    /// This does not affect timeouts for remote procedure calls.
-    pub fn set_protocol_timeout(&mut self, timeout: Duration) {
-        self.timeout = timeout;
-    }
-
-    /// Initializes the WAMP protocol using the given transport, connecting to the provided Realm.
-    pub fn initialize(self, realm: Uri) -> impl Future<Item=Client<T>, Error=Error> {
-        // Copy to avoid partial move issues
-        let timeout1 = self.timeout;
-        let timeout2 = self.timeout;
-
-        // Start by sending TxMessage::Hello, ...
-        self.transport.send(TxMessage::Hello {
-            realm,
-            details: {
-                let mut details = HashMap::new();
-                details.insert("roles".into(), {
-                    let mut roles = HashMap::new();
-                    if cfg!(feature = "caller") {
-                        roles.insert("caller".into(), TV::Dict(Default::default()));
-                    }
-                    if cfg!(feature = "callee") {
-                        roles.insert("callee".into(), TV::Dict(Default::default()));
-                    }
-                    if cfg!(feature = "subscriber") {
-                        roles.insert("subscriber".into(), TV::Dict(Default::default()));
-                    }
-                    if cfg!(feature = "publisher") {
-                        roles.insert("publisher".into(), TV::Dict(Default::default()));
-                    }
-                    TV::Dict(roles)
-                });
-                details
-            },
-        }).and_then(|transport|
-            transport.into_future().map_err(|(error, _transport)| error)
-        ).and_then(move |(item, transport)| match item { // move to take the cloned timeout
-            Some(RxMessage::Welcome { session, details }) => future::ok(Client {
-                transport, session,
-                timeout: timeout1,
-                router_capabilities: RouterCapabilities::from_details(&details)
-            }),
-            Some(message) => future::err(Error::from(WampError::UnexpectedMessage {
-                message,
-                expecting: "Welcome"
-            })),
-            _ => future::err(Error::from(WampError::TransportStreamClosed))
-        }).select2(
-            TIMER.sleep(timeout2)
-        ).then(move |res| match res {
-            Ok(future::Either::A((client, _timeout))) => Ok(client),
-            Ok(future::Either::B(((), _client))) => Err(WampError::Timeout {
-                time: timeout2,
-            }.into()),
-            Err(future::Either::A((err, _timeout))) => Err(err),
-            Err(future::Either::B((_err, _timeout))) => panic!("timeout future failed"),
-        })
-    }
-}
-
 /// A WAMP client.
 ///
 /// By default, this supports all 4 roles supported by this crate. They can be
-/// selectively disabled if not necessary (to improve compilation time) with the cargo features
-/// `callee`, `caller`, `publisher`, and `subscriber`.
-///
-/// Create a `Client` with a `ClientBuilder`.
-pub struct Client<T: WampTransport> {
-    transport: T,
+/// selectively enabled if not all necessary (to improve compilation time) with the Cargo
+/// features `callee`, `caller`, `publisher`, and `subscriber`.
+pub struct Client<T: Transport> {
+    sender: Arc<Mutex<T>>,
+    receiver: Arc<Mutex<T::IncomingValues>>,
+
     session: Id<GlobalScope>,
-    timeout: Duration,
+    timeout_duration: Duration,
     router_capabilities: RouterCapabilities,
+
+    #[cfg(feature = "subscriber")]
+    subscriptions: Arc<Mutex<HashMap<Subscription, BroadcastHandler>>>,
 }
-impl <T: WampTransport> Client<T> {
+impl <T: Transport> Client<T> {
+    /// Begins initialization of a new [`Client`]. The client will attempt to connect to the WAMP
+    /// router at the given URL and join the given realm; the future will not resolve until
+    /// both of those tasks succeed.
+    ///
+    /// This method will handle initialization of the [`Transport`] used, but the caller must
+    /// specify which transport will be used.
+    ///
+    /// The given [`Duration`] will be used as a timeout for protocol-level communications. In
+    /// particular, it will *not* be used as a timeout for remote procedure calls. RPC timeouts
+    /// can be specified in the [`Client::call`] method, if the `caller` Cargo feature is enabled
+    /// (on by default).
+    pub fn new(url: &str, realm: Uri, timeout: Duration) -> impl Future<Item=Self, Error=Error> {
+        let received: ReceivedValues = Default::default();
+        let (connect, mht) = T::connect(url, default.clone());
+        transport_future.and_then(|transport| {
+            initialize::InitializeFuture::new(transport, incoming, realm, timeout)
+        })
+    }
 
     //#[cfg(feature = "caller")]
     ///// Calls an RPC which has been registered to the router by any client in the same realm as
@@ -155,15 +106,32 @@ impl <T: WampTransport> Client<T> {
     //    unimplemented!()
     //}
 
-    //#[cfg(feature = "subscriber")]
-    ///// Subscribes to a channel.
-    //fn subscribe<F: FnMut(Broadcast)>(
-    //    &mut self,
-    //    topic: Uri,
-    //    handler: F
-    //) -> impl Future<Item=Subscription, Error=Error> {
-    //    unimplemented!()
-    //}
+    #[cfg(feature = "subscriber")]
+    /// Subscribes to a channel.
+    ///
+    /// The provided broadcast handler must not block! Any potentially blocking operations it must
+    /// perform should be handled by returning a [`Future`], which will be spawned as an subtask
+    /// on the executor that drives the returned future. If the handler does not need to perform any
+    /// blocking operations, it should return a leaf future (likely created by [`future::ok`]). If the
+    /// returned future fails, the error will be propogated up to the parent future (the one
+    /// returned by this) method.
+    ///
+    /// # Return Value
+    ///
+    /// This method returns [`Ok`] if the router supports the "broker" role, and [`Err`] if it
+    /// doesn't. The future will return a successful result if subscription was successful, and an
+    /// error one if a timeout occurred or some other failure happened.
+    pub fn subscribe<F: 'static + FnMut(Broadcast) -> Box<Future<Item = (), Error = Error>>>(
+        &mut self,
+        topic: Uri,
+        handler: F
+    ) -> Result<subscribe::SubscriptionFuture<T>, Error> {
+        if !self.router_capabilities.broker {
+            Err(WampError::RouterSupportMissing.into())
+        } else {
+            Ok(subscribe::SubscriptionFuture::new(self, topic, Box::new(handler)))
+        }
+    }
 
     //#[cfg(feature = "subscriber")]
     ///// Unsubscribes from a channel.
@@ -226,12 +194,4 @@ pub struct Broadcast {
     pub list: Vec<TV>,
     /// Keyword values. If there are none, this should be an empty `HashMap`.
     pub dict: HashMap<String, TV>,
-}
-
-#[cfg(feature = "subscriber")]
-/// The result of subscribing to a channel. Can be used to unsubscribe.
-#[derive(Debug)]
-pub struct Subscription {
-    // The ID of the subscription, chosen by the router.
-    id: Id<RouterScope>,
 }

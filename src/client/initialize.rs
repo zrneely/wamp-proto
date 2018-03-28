@@ -1,0 +1,130 @@
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use failure::Error;
+use futures::{Async, Future, Sink};
+use futures::task::Context;
+use parking_lot::Mutex;
+use tokio_timer::Sleep;
+
+use {Client, Transport, TransportableValue as TV, TsPollSet, Uri};
+use client::{RouterCapabilities, TIMER};
+use error::WampError;
+use proto::{rx, TxMessage};
+
+enum InitializeFutureState {
+    StartSendHello(Option<TxMessage>),
+    SendHello,
+    WaitWelcome,
+}
+
+pub(crate) struct InitializeFuture<T: Transport> {
+    state: InitializeFutureState,
+
+    realm: Uri,
+    timeout: Sleep,
+    timeout_duration: Duration,
+
+    sender: Arc<Mutex<T>>,
+    received: TsPollSet<rx::Welcome>,
+}
+impl <T> InitializeFuture<T> where T: Transport {
+    pub(crate) fn new(
+        sender: T,
+        receiver: T::IncomingValues,
+        realm: Uri,
+        timeout: Duration,
+    ) -> Self {
+        InitializeFuture {
+            state: InitializeFutureState::StartSendHello(Some(TxMessage::Hello {
+                realm: realm.clone(),
+                details: {
+                    let mut details = HashMap::new();
+                    details.insert("roles".into(), {
+                        let mut roles = HashMap::new();
+                        if cfg!(feature = "caller") {
+                            roles.insert("caller".into(), TV::Dict(Default::default()));
+                        }
+                        if cfg!(feature = "callee") {
+                            roles.insert("callee".into(), TV::Dict(Default::default()));
+                        }
+                        if cfg!(feature = "subscriber") {
+                            roles.insert("subscriber".into(), TV::Dict(Default::default()));
+                        }
+                        if cfg!(feature = "publisher") {
+                            roles.insert("publisher".into(), TV::Dict(Default::default()));
+                        }
+                        TV::Dict(roles)
+                    });
+                    details
+                },
+            })),
+
+            realm,
+            //timeout: TIMER.sleep(timeout),
+            timeout_duration: timeout,
+
+            sender: Arc::new(Mutex::new(sender)),
+            receiver: Arc::new(Mutex::new(receiver)),
+        }
+    }
+}
+impl <T> Future for InitializeFuture<T> where T: Transport {
+    type Item = Client<T>;
+    type Error = Error;
+
+    fn poll(&mut self, cx: &mut Context) -> Result<Async<Self::Item>, Self::Error> {
+        loop {
+            // Before running the state machine, check for timeout.
+            match self.timeout.poll(cx)? {
+                Async::Pending => {}
+                Async::Ready(_) => return Err(WampError::Timeout {
+                    time: self.timeout_duration,
+                }.into()),
+            }
+
+            match self.state {
+                // Step 1: Add the hello message to the sender's message queue.
+                InitializeFutureState::StartSendHello(Some(message)) => {
+                    match self.sender.lock().poll_ready(cx)? {
+                        Async::Pending => {
+                            self.state = InitializeFutureState::StartSendHello(Some(message));
+                            return Ok(Async::Pending);
+                        }
+                        Async::Ready(_) => {
+                            self.state = InitializeFutureState::SendHello;
+                            sender.start_send(message)?;
+                        }
+                    }
+                }
+                InitializeFutureState::StartSendHello(None) => {
+                    panic!("invalid InitializeFutureState");
+                }
+
+                // Step 2: Wait for the sender's message queue to empty.
+                InitializeFutureState::SendHello => {
+                    try_ready!(self.sender.lock().poll_flush(cx));
+                    self.state = InitializeFutureState::WaitWelcome;
+                }
+
+                // Step 3: Wait for a rx::Welcome message.
+                InitializeFutureState::WaitWelcome => {
+                    let msg = try_ready!(self.received.lock().poll_take(|_| true, cx));
+
+                    return Ok(Async::Ready(Client {
+                        sender: self.sender,
+                        receiver: self.receiver,
+
+                        session: msg.session,
+                        timeout_duration: self.timeout_duration,
+                        router_capabilities: RouterCapabilities::from_details(&msg.details),
+
+                        subscriptions: Arc::new(Mutex::new(HashMap::new())),
+                    }))
+                }
+            }
+        }
+    }
+}
