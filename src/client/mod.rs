@@ -6,9 +6,9 @@ use std::time::Duration;
 use failure::Error;
 use futures::{Future, FutureExt};
 use parking_lot::Mutex;
-//use tokio_timer;
+use tokio_timer::timer;
 
-use {Id, IncomingValues, GlobalScope, RouterScope, Uri, TransportableValue as TV, Transport};
+use {Id, GlobalScope, ReceivedValues, RouterScope, Uri, TransportableValue as TV, Transport};
 use error::WampError;
 
 mod initialize;
@@ -20,12 +20,6 @@ pub use self::subscribe::Subscription;
 
 use self::subscribe::BroadcastHandler;
 
-lazy_static! {
-    // Just accept the defaults; performance could degrade very slightly if any timeout is set to
-    // more than 409.6 seconds.
-    static ref TIMER: tokio_timer::Timer = tokio_timer::wheel().build();
-}
-
 /// A WAMP client.
 ///
 /// By default, this supports all 4 roles supported by this crate. They can be
@@ -33,9 +27,10 @@ lazy_static! {
 /// features `callee`, `caller`, `publisher`, and `subscriber`.
 pub struct Client<T: Transport> {
     sender: Arc<Mutex<T>>,
-    receiver: Arc<Mutex<T::IncomingValues>>,
+    received: ReceivedValues,
 
     session: Id<GlobalScope>,
+    timer_handle: timer::Handle,
     timeout_duration: Duration,
     router_capabilities: RouterCapabilities,
 
@@ -54,12 +49,13 @@ impl <T: Transport> Client<T> {
     /// particular, it will *not* be used as a timeout for remote procedure calls. RPC timeouts
     /// can be specified in the [`Client::call`] method, if the `caller` Cargo feature is enabled
     /// (on by default).
-    pub fn new(url: &str, realm: Uri, timeout: Duration) -> impl Future<Item=Self, Error=Error> {
+    pub fn new(url: &str, realm: Uri, timer_handle: timer::Handle, timeout: Duration) -> impl Future<Item=Self, Error=Error> {
         let received: ReceivedValues = Default::default();
-        let (connect, mht) = T::connect(url, default.clone());
-        transport_future.and_then(|transport| {
-            initialize::InitializeFuture::new(transport, incoming, realm, timeout)
+        let (connect, mht) = T::connect(url, received.clone());
+        connect.and_then(|transport| {
+            initialize::InitializeFuture::new(transport, received, realm, timer_handle, timeout)
         })
+        // TODO also give back mht
     }
 
     //#[cfg(feature = "caller")]

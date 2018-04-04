@@ -4,12 +4,20 @@ use futures::task::{Context, Waker};
 
 /// A set which registers interest in a potential value if a query finds no result. Requires
 /// external synchronization.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PollableSet<T> {
     // The actual set of items we are aware of.
     items: Vec<T>,
     // The tasks to notify when a new value is added.
     tasks: Vec<Waker>,
+}
+impl<T> Default for PollableSet<T> {
+    fn default() -> Self {
+        PollableSet {
+            items: Vec::new(),
+            tasks: Vec::new(),
+        }
+    }
 }
 impl <T> PollableSet<T> {
 
@@ -38,7 +46,7 @@ impl <T> PollableSet<T> {
                 if !self.tasks.iter().any(|w| waker.will_wake(w)) {
                     // The current task is not yet interested, so add it to the list of interested
                     // tasks.
-                    self.tasks.push(waker);
+                    self.tasks.push(waker.clone());
                 }
                 Async::Pending
             }

@@ -1,18 +1,18 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use failure::Error;
 use futures::{Async, Future, Sink};
 use futures::task::Context;
 use parking_lot::Mutex;
-use tokio_timer::Sleep;
+use tokio_timer::{timer, Delay};
 
-use {Client, Transport, TransportableValue as TV, TsPollSet, Uri};
-use client::{RouterCapabilities, TIMER};
+use {Client, ReceivedValues, Transport, TransportableValue as TV, Uri};
+use client::RouterCapabilities;
 use error::WampError;
-use proto::{rx, TxMessage};
+use proto::TxMessage;
 
 enum InitializeFutureState {
     StartSendHello(Option<TxMessage>),
@@ -24,17 +24,20 @@ pub(crate) struct InitializeFuture<T: Transport> {
     state: InitializeFutureState,
 
     realm: Uri,
-    timeout: Sleep,
+
+    timer_handle: timer::Handle,
+    timeout: Delay,
     timeout_duration: Duration,
 
     sender: Arc<Mutex<T>>,
-    received: TsPollSet<rx::Welcome>,
+    received: ReceivedValues,
 }
 impl <T> InitializeFuture<T> where T: Transport {
     pub(crate) fn new(
         sender: T,
-        receiver: T::IncomingValues,
+        received: ReceivedValues,
         realm: Uri,
+        timer_handle: timer::Handle,
         timeout: Duration,
     ) -> Self {
         InitializeFuture {
@@ -63,11 +66,13 @@ impl <T> InitializeFuture<T> where T: Transport {
             })),
 
             realm,
-            //timeout: TIMER.sleep(timeout),
+
+            timer_handle,
+            timeout: timer_handle.delay(Instant::now() + timeout),
             timeout_duration: timeout,
 
             sender: Arc::new(Mutex::new(sender)),
-            receiver: Arc::new(Mutex::new(receiver)),
+            received,
         }
     }
 }
@@ -77,6 +82,7 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
 
     fn poll(&mut self, cx: &mut Context) -> Result<Async<Self::Item>, Self::Error> {
         loop {
+
             // Before running the state machine, check for timeout.
             match self.timeout.poll(cx)? {
                 Async::Pending => {}
@@ -88,7 +94,8 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
             match self.state {
                 // Step 1: Add the hello message to the sender's message queue.
                 InitializeFutureState::StartSendHello(Some(message)) => {
-                    match self.sender.lock().poll_ready(cx)? {
+                    let sender = self.sender.lock();
+                    match sender.poll_ready(cx)? {
                         Async::Pending => {
                             self.state = InitializeFutureState::StartSendHello(Some(message));
                             return Ok(Async::Pending);
@@ -111,14 +118,15 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
 
                 // Step 3: Wait for a rx::Welcome message.
                 InitializeFutureState::WaitWelcome => {
-                    let msg = try_ready!(self.received.lock().poll_take(|_| true, cx));
+                    let msg = try_ready!(Ok(self.received.welcome.lock().poll_take(|_| true, cx)));
 
                     return Ok(Async::Ready(Client {
                         sender: self.sender,
-                        receiver: self.receiver,
+                        received: self.received,
 
                         session: msg.session,
                         timeout_duration: self.timeout_duration,
+                        timer_handle: self.timer_handle,
                         router_capabilities: RouterCapabilities::from_details(&msg.details),
 
                         subscriptions: Arc::new(Mutex::new(HashMap::new())),

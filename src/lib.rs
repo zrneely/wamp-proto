@@ -22,13 +22,16 @@ extern crate regex;
 extern crate serde;
 extern crate tokio_timer;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering}
+};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use failure::Error;
 use futures::prelude::*;
-use futures::task::Context;
+use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
 use regex::Regex;
 
