@@ -6,7 +6,7 @@ authors = ["Zachary Neely <zrussellneely@gmail.com>"]
 [dependencies]
 failure = "0.1"
 failure_derive = "0.1"
-futures = "0.2.0-beta"
+futures = "0.1"
 lazy_static = "1"
 parking_lot = "0.5"
 rand = "0.4"

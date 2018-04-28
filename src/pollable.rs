@@ -1,6 +1,6 @@
 
 use futures::Async;
-use futures::task::{Context, Waker};
+use futures::task::{self, Task};
 
 /// A set which registers interest in a potential value if a query finds no result. Requires
 /// external synchronization.
@@ -9,7 +9,7 @@ pub struct PollableSet<T> {
     // The actual set of items we are aware of.
     items: Vec<T>,
     // The tasks to notify when a new value is added.
-    tasks: Vec<Waker>,
+    tasks: Vec<Task>,
 }
 impl<T> Default for PollableSet<T> {
     fn default() -> Self {
@@ -34,7 +34,7 @@ impl <T> PollableSet<T> {
     /// will notify the task when a value is added.
     ///
     /// If multiple values match the predicate, only the first added is returned.
-    pub fn poll_take<F>(&mut self, mut predicate: F, cx: &mut Context) -> Async<T>
+    pub fn poll_take<F>(&mut self, mut predicate: F) -> Async<T>
         where F: FnMut(&T) -> bool {
         match self.items.iter().enumerate().filter(|&(_, t): &(usize, &T)| predicate(t)).next() {
             Some((idx, _)) => {
@@ -42,13 +42,13 @@ impl <T> PollableSet<T> {
                 Async::Ready(value)
             }
             None => {
-                let waker = cx.waker();
-                if !self.tasks.iter().any(|w| waker.will_wake(w)) {
+                let task = task::current();
+                if !self.tasks.iter().any(|t| t.will_notify_current()) {
                     // The current task is not yet interested, so add it to the list of interested
                     // tasks.
-                    self.tasks.push(waker.clone());
+                    self.tasks.push(task);
                 }
-                Async::Pending
+                Async::NotReady
             }
         }
     }
@@ -60,7 +60,7 @@ impl <T> PollableSet<T> {
 
         // Notify all registered tasks that a new value was added.
         for task in self.tasks.drain(..) {
-            task.wake();
+            task.notify();
         }
     }
 }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use failure::Error;
-use futures::{Future, FutureExt};
+use futures::Future;
 use parking_lot::Mutex;
 use tokio_timer::timer;
 
@@ -52,7 +52,7 @@ impl <T: Transport> Client<T> {
     pub fn new(url: &str, realm: Uri, timer_handle: timer::Handle, timeout: Duration) -> impl Future<Item=Self, Error=Error> {
         let received: ReceivedValues = Default::default();
         let (connect, mht) = T::connect(url, received.clone());
-        connect.and_then(|transport| {
+        connect.and_then(move |transport| {
             initialize::InitializeFuture::new(transport, received, realm, timer_handle, timeout)
         })
         // TODO also give back mht

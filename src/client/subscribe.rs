@@ -4,8 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use failure::Error;
-use futures::{Async, Future, Sink};
-use futures::task::Context;
+use futures::{Async, AsyncSink, Future};
 use parking_lot::Mutex;
 use tokio_timer::Delay;
 
@@ -71,66 +70,71 @@ impl <T: Transport> Future for SubscriptionFuture<T> {
     type Item = Subscription;
     type Error = Error;
 
-    fn poll(&mut self, cx: &mut Context) -> Result<Async<Self::Item>, Self::Error> {
+    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         loop {
             // Before running the state machine, check for timeout.
-            match self.timeout.poll(cx)? {
-                Async::Pending => {}
+            match self.timeout.poll()? {
+                Async::NotReady => {}
                 Async::Ready(_) => return Err(WampError::Timeout {
                     time: self.timeout_duration,
                 }.into()),
             }
 
-            match self.state {
+            let mut pending = false;
+            self.state = match self.state {
                 // Step 1: Add the subscription request to the sender's message queue. If the queue
                 // is full, return NotReady.
-                SubscriptionFutureState::StartSendSubscribe(Some(message)) => {
-                    let sender = self.sender.lock();
-                    match sender.poll_ready(cx)? {
-                        Async::Pending => {
-                            self.state = SubscriptionFutureState::StartSendSubscribe(
-                                Some(message)
-                            );
-                            return Ok(Async::Pending);
+                SubscriptionFutureState::StartSendSubscribe(ref mut message) => {
+                    let message = message.take().expect("invalid SubscriptionFutureState");
+                    match self.sender.lock().start_send(message)? {
+                        AsyncSink::NotReady(message) => {
+                            pending = true;
+                            SubscriptionFutureState::StartSendSubscribe(Some(message))
                         }
-                        Async::Ready(_) => {
-                            self.state = SubscriptionFutureState::SendSubscribe;
-                            sender.start_send(message)?;
-                        }
+                        AsyncSink::Ready => SubscriptionFutureState::SendSubscribe,
                     }
-                }
-                SubscriptionFutureState::StartSendSubscribe(None) => {
-                    panic!("invalid SubscriptionFutureState");
                 }
 
                 // Step 2: Wait for the sender's message queue to empty. If it's not empty, return
                 // NotReady.
                 SubscriptionFutureState::SendSubscribe => {
-                    try_ready!(self.sender.lock().poll_flush(cx));
-                    self.state = SubscriptionFutureState::WaitSubscribed;
+                    match self.sender.lock().poll_complete()? {
+                        Async::NotReady => {
+                            pending = true;
+                            SubscriptionFutureState::SendSubscribe
+                        }
+                        Async::Ready(_) => SubscriptionFutureState::WaitSubscribed,
+                    }
                 }
 
                 // Step 3: Wait for a rx::Welcome from the receiver. If we haven't yet received
                 // one, return NotReady. Through the magic of PollableSet, the current
                 // task will be notified when a new Subscribed message arrives.
                 SubscriptionFutureState::WaitSubscribed => {
-                    let msg = try_ready!(Ok(self.received.lock().poll_take(
-                        |msg| msg.request == self.request_id,
-                        cx,
-                    )));
+                    match self.received.lock().poll_take(|msg| msg.request == self.request_id) {
+                        Async::NotReady => {
+                            pending = true;
+                            SubscriptionFutureState::WaitSubscribed
+                        }
+                        Async::Ready(msg) => {
+                            let subscription = Subscription {
+                                subscription_id: msg.subscription,
+                                topic: self.topic.clone(),
+                            };
 
-                    let subscription = Subscription {
-                        subscription_id: msg.subscription,
-                        topic: self.topic.clone(),
-                    };
+                            self.subscriptions.lock().insert(
+                                subscription.clone(),
+                                self.handler.take().unwrap(),
+                            );
 
-                    self.subscriptions.lock().insert(
-                        subscription.clone(),
-                        self.handler.take().expect("SubscriptionFuture missing handler!"),
-                    );
-
-                    return Ok(Async::Ready(subscription));
+                            return Ok(Async::Ready(subscription));
+                        }
+                    }
                 }
+            };
+
+            if pending {
+                return Ok(Async::NotReady)
             }
         }
     }

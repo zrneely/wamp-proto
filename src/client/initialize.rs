@@ -4,8 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use failure::Error;
-use futures::{Async, Future, Sink};
-use futures::task::Context;
+use futures::{Async, AsyncSink, Future};
 use parking_lot::Mutex;
 use tokio_timer::{timer, Delay};
 
@@ -23,8 +22,6 @@ enum InitializeFutureState {
 pub(crate) struct InitializeFuture<T: Transport> {
     state: InitializeFutureState,
 
-    realm: Uri,
-
     timer_handle: timer::Handle,
     timeout: Delay,
     timeout_duration: Duration,
@@ -38,8 +35,10 @@ impl <T> InitializeFuture<T> where T: Transport {
         received: ReceivedValues,
         realm: Uri,
         timer_handle: timer::Handle,
-        timeout: Duration,
+        timeout_duration: Duration,
     ) -> Self {
+        let timeout = timer_handle.delay(Instant::now() + timeout_duration);
+
         InitializeFuture {
             state: InitializeFutureState::StartSendHello(Some(TxMessage::Hello {
                 realm: realm.clone(),
@@ -65,11 +64,7 @@ impl <T> InitializeFuture<T> where T: Transport {
                 },
             })),
 
-            realm,
-
-            timer_handle,
-            timeout: timer_handle.delay(Instant::now() + timeout),
-            timeout_duration: timeout,
+            timer_handle, timeout, timeout_duration,
 
             sender: Arc::new(Mutex::new(sender)),
             received,
@@ -80,58 +75,66 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
     type Item = Client<T>;
     type Error = Error;
 
-    fn poll(&mut self, cx: &mut Context) -> Result<Async<Self::Item>, Self::Error> {
+    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         loop {
 
             // Before running the state machine, check for timeout.
-            match self.timeout.poll(cx)? {
-                Async::Pending => {}
+            match self.timeout.poll()? {
+                Async::NotReady => {}
                 Async::Ready(_) => return Err(WampError::Timeout {
                     time: self.timeout_duration,
                 }.into()),
             }
 
-            match self.state {
+            let mut pending = false;
+            self.state = match self.state {
                 // Step 1: Add the hello message to the sender's message queue.
-                InitializeFutureState::StartSendHello(Some(message)) => {
-                    let sender = self.sender.lock();
-                    match sender.poll_ready(cx)? {
-                        Async::Pending => {
-                            self.state = InitializeFutureState::StartSendHello(Some(message));
-                            return Ok(Async::Pending);
+                InitializeFutureState::StartSendHello(ref mut message) => {
+                    let message = message.take().expect("invalid InitializeFutureState");
+                    match self.sender.lock().start_send(message)? {
+                        AsyncSink::NotReady(message) => {
+                            pending = true;
+                            InitializeFutureState::StartSendHello(Some(message))
                         }
-                        Async::Ready(_) => {
-                            self.state = InitializeFutureState::SendHello;
-                            sender.start_send(message)?;
-                        }
+                        AsyncSink::Ready => InitializeFutureState::SendHello,
                     }
-                }
-                InitializeFutureState::StartSendHello(None) => {
-                    panic!("invalid InitializeFutureState");
                 }
 
                 // Step 2: Wait for the sender's message queue to empty.
                 InitializeFutureState::SendHello => {
-                    try_ready!(self.sender.lock().poll_flush(cx));
-                    self.state = InitializeFutureState::WaitWelcome;
+                    match self.sender.lock().poll_complete()? {
+                        Async::NotReady => {
+                            pending = true;
+                            InitializeFutureState::SendHello
+                        }
+                        Async::Ready(_) => InitializeFutureState::WaitWelcome
+                    }
                 }
 
                 // Step 3: Wait for a rx::Welcome message.
                 InitializeFutureState::WaitWelcome => {
-                    let msg = try_ready!(Ok(self.received.welcome.lock().poll_take(|_| true, cx)));
+                    match self.received.welcome.lock().poll_take(|_| true) {
+                        Async::NotReady => {
+                            pending = true;
+                            InitializeFutureState::WaitWelcome
+                        }
+                        Async::Ready(msg) => return Ok(Async::Ready(Client {
+                            sender: self.sender.clone(),
+                            received: self.received.clone(),
 
-                    return Ok(Async::Ready(Client {
-                        sender: self.sender,
-                        received: self.received,
+                            session: msg.session,
+                            timeout_duration: self.timeout_duration,
+                            timer_handle: self.timer_handle.clone(),
+                            router_capabilities: RouterCapabilities::from_details(&msg.details),
 
-                        session: msg.session,
-                        timeout_duration: self.timeout_duration,
-                        timer_handle: self.timer_handle,
-                        router_capabilities: RouterCapabilities::from_details(&msg.details),
-
-                        subscriptions: Arc::new(Mutex::new(HashMap::new())),
-                    }))
+                            subscriptions: Arc::new(Mutex::new(HashMap::new())),
+                        }))
+                    }
                 }
+            };
+
+            if pending {
+                return Ok(Async::NotReady)
             }
         }
     }
