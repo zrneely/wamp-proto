@@ -6,11 +6,10 @@ use std::time::{Duration, Instant};
 use failure::Error;
 use futures::{Async, AsyncSink, Future};
 use parking_lot::Mutex;
-use tokio_timer::Delay;
+use tokio::timer::Delay;
 
-use ::{Broadcast, Client, GlobalScope, Id, RouterScope, Transport, TsPollSet, Uri};
-use error::WampError;
-use proto::{rx, TxMessage};
+use ::{Broadcast, Client, GlobalScope, Id, ReceivedValues, RouterScope, Transport, Uri};
+use proto::TxMessage;
 
 /// The result of subscribing to a channel. Can be used to unsubscribe.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -43,7 +42,7 @@ pub struct SubscriptionFuture<T: Transport> {
     subscriptions: Arc<Mutex<HashMap<Subscription, BroadcastHandler>>>,
 
     sender: Arc<Mutex<T>>,
-    received: TsPollSet<rx::Subscribed>,
+    received: ReceivedValues,
 }
 impl <T: Transport> SubscriptionFuture<T> {
     pub(crate) fn new(client: &mut Client<T>, topic: Uri, handler: BroadcastHandler) -> Self {
@@ -57,11 +56,11 @@ impl <T: Transport> SubscriptionFuture<T> {
 
             topic, request_id,
             handler: Some(handler),
-            timeout: client.timer_handle.delay(Instant::now() + client.timeout_duration),
+            timeout: Delay::new(Instant::now() + client.timeout_duration),
             timeout_duration: client.timeout_duration,
 
             sender: client.sender.clone(),
-            received: client.received.subscribed.clone(),
+            received: client.received.clone(),
             subscriptions: client.subscriptions.clone(),
         }
     }
@@ -72,13 +71,8 @@ impl <T: Transport> Future for SubscriptionFuture<T> {
 
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         loop {
-            // Before running the state machine, check for timeout.
-            match self.timeout.poll()? {
-                Async::NotReady => {}
-                Async::Ready(_) => return Err(WampError::Timeout {
-                    time: self.timeout_duration,
-                }.into()),
-            }
+            // Before running the state machine, check for timeout or errors in the protocol.
+            super::check_for_timeout_or_error(&mut self.timeout, &mut self.received)?;
 
             let mut pending = false;
             self.state = match self.state {
@@ -111,7 +105,9 @@ impl <T: Transport> Future for SubscriptionFuture<T> {
                 // one, return NotReady. Through the magic of PollableSet, the current
                 // task will be notified when a new Subscribed message arrives.
                 SubscriptionFutureState::WaitSubscribed => {
-                    match self.received.lock().poll_take(|msg| msg.request == self.request_id) {
+                    match self.received.subscribed.lock().poll_take(
+                        |msg| msg.request == self.request_id
+                    ) {
                         Async::NotReady => {
                             pending = true;
                             SubscriptionFutureState::WaitSubscribed

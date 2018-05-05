@@ -20,13 +20,13 @@ extern crate parking_lot;
 extern crate rand;
 extern crate regex;
 extern crate serde;
-extern crate tokio_timer;
+extern crate tokio;
 
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering}
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 
 use failure::Error;
@@ -223,8 +223,9 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     type ConnectFuture: Future<Item = Self, Error = Error>;
 
     /// The type of future used to drive the long-running message-parsing and RPC-invoking
-    /// task.
-    type MessageHandlingTaskFuture: Future<Item = !, Error = Error>;
+    /// task. It can never succeed, and any failures will be reported through the
+    /// [`ReceivedValues`] instance returned by the [`connect`] method.
+    type MessageHandlingTask: Future<Item = (), Error = ()> + Send + 'static;
 
     /// Asynchronously constructs a transport to the router at the given location.
     ///
@@ -253,19 +254,32 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     ///
     /// This method should never panic. It should handle failures by returning [`Err`] from the
     /// appropriate future.
-    fn connect(url: &str, rv: ReceivedValues) -> (
-        Self::ConnectFuture,
-        Self::MessageHandlingTaskFuture
-    );
+    fn connect(url: &str) -> ConnectResult<Self>;
 }
 
-/// A thread-safe pollable set - convenience typedef to save on typing.
+/// The result of connecting to a channel.
+pub struct ConnectResult<T: Transport> {
+    /// The task which will eventually provide the actual Transport object.
+    pub future: T::ConnectFuture,
+    /// A long-running task which does the actual listening for messages and fires new tasks
+    /// for callbacks, RPCs, etc.
+    pub message_handling_task: T::MessageHandlingTask,
+    /// The queue of incoming messages and outgoing commands to the message handling task.
+    pub received_values: ReceivedValues,
+}
+
+/// A thread-safe pollable set - convenience typedef to save on typing. This effectively acts
+/// as an inefficient spmc queue, with the ability to listen only for messages that pass a
+/// caller-defined predicate.
+// TODO use hashmap of request ID -> oneshot spmc queues instead? less locking, probably more
+// efficient
 pub type TsPollSet<T> = Arc<Mutex<PollableSet<T>>>;
 
-/// Acts as a buffer for each type of returned message.
-#[derive(Clone, Debug, Default)]
+/// Acts as a buffer for each type of returned message, and any possible errors
+/// (either in the transport layer or the protocol).
+#[derive(Clone)]
 pub struct ReceivedValues {
-    /// The buffer of incoming "WELCOME" messages.
+    /// The queue of incoming "WELCOME" messages.
     pub welcome: TsPollSet<rx::Welcome>,
     /// The buffer of incoming "ABORT" messages.
     pub abort: TsPollSet<rx::Abort>,
@@ -273,4 +287,8 @@ pub struct ReceivedValues {
     pub goodbye: TsPollSet<rx::Goodbye>,
     /// The buffer of incoming "SUBSCRIBED" messages.
     pub subscribed: TsPollSet<rx::Subscribed>,
+
+    /// A buffer of received errors. If an error is ever added, it is expected that
+    /// no further messages are ever received.
+    pub errors: Arc<Mutex<Option<Error>>>,
 }

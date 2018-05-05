@@ -6,11 +6,10 @@ use std::time::{Duration, Instant};
 use failure::Error;
 use futures::{Async, AsyncSink, Future};
 use parking_lot::Mutex;
-use tokio_timer::{timer, Delay};
+use tokio::timer::Delay;
 
 use {Client, ReceivedValues, Transport, TransportableValue as TV, Uri};
 use client::RouterCapabilities;
-use error::WampError;
 use proto::TxMessage;
 
 enum InitializeFutureState {
@@ -22,7 +21,6 @@ enum InitializeFutureState {
 pub(crate) struct InitializeFuture<T: Transport> {
     state: InitializeFutureState,
 
-    timer_handle: timer::Handle,
     timeout: Delay,
     timeout_duration: Duration,
 
@@ -34,10 +32,9 @@ impl <T> InitializeFuture<T> where T: Transport {
         sender: T,
         received: ReceivedValues,
         realm: Uri,
-        timer_handle: timer::Handle,
         timeout_duration: Duration,
     ) -> Self {
-        let timeout = timer_handle.delay(Instant::now() + timeout_duration);
+        let timeout = Delay::new(Instant::now() + timeout_duration);
 
         InitializeFuture {
             state: InitializeFutureState::StartSendHello(Some(TxMessage::Hello {
@@ -64,7 +61,7 @@ impl <T> InitializeFuture<T> where T: Transport {
                 },
             })),
 
-            timer_handle, timeout, timeout_duration,
+            timeout, timeout_duration,
 
             sender: Arc::new(Mutex::new(sender)),
             received,
@@ -77,14 +74,8 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
 
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         loop {
-
-            // Before running the state machine, check for timeout.
-            match self.timeout.poll()? {
-                Async::NotReady => {}
-                Async::Ready(_) => return Err(WampError::Timeout {
-                    time: self.timeout_duration,
-                }.into()),
-            }
+            // Before running the state machine, check for timeout or errors.
+            super::check_for_timeout_or_error(&mut self.timeout, &mut self.received)?;
 
             let mut pending = false;
             self.state = match self.state {
@@ -124,7 +115,6 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
 
                             session: msg.session,
                             timeout_duration: self.timeout_duration,
-                            timer_handle: self.timer_handle.clone(),
                             router_capabilities: RouterCapabilities::from_details(&msg.details),
 
                             subscriptions: Arc::new(Mutex::new(HashMap::new())),

@@ -4,11 +4,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use failure::Error;
-use futures::Future;
+use futures::{Async, Future};
 use parking_lot::Mutex;
-use tokio_timer::timer;
+use tokio::{
+    runtime,
+    timer::Delay,
+};
 
-use {Id, GlobalScope, ReceivedValues, RouterScope, Uri, TransportableValue as TV, Transport};
+use {ConnectResult, Id, GlobalScope, ReceivedValues, RouterScope, Uri, TransportableValue as TV, Transport};
 use error::WampError;
 
 mod initialize;
@@ -20,6 +23,22 @@ pub use self::subscribe::Subscription;
 
 use self::subscribe::BroadcastHandler;
 
+fn check_for_timeout_or_error(
+    timeout: &mut Delay,
+    received_vals: &mut ReceivedValues
+) -> Result<(), Error> {
+    match timeout.poll()? {
+        Async::Ready(_) => return Err(WampError::Timeout.into()),
+        _ => {}
+    }
+
+    if let Some(error) = received_vals.errors.lock().take() {
+        Err(error)
+    } else {
+        Ok(())
+    }
+}
+
 /// A WAMP client.
 ///
 /// By default, this supports all 4 roles supported by this crate. They can be
@@ -30,7 +49,6 @@ pub struct Client<T: Transport> {
     received: ReceivedValues,
 
     session: Id<GlobalScope>,
-    timer_handle: timer::Handle,
     timeout_duration: Duration,
     router_capabilities: RouterCapabilities,
 
@@ -38,24 +56,30 @@ pub struct Client<T: Transport> {
     subscriptions: Arc<Mutex<HashMap<Subscription, BroadcastHandler>>>,
 }
 impl <T: Transport> Client<T> {
-    /// Begins initialization of a new [`Client`]. The client will attempt to connect to the WAMP
-    /// router at the given URL and join the given realm; the future will not resolve until
-    /// both of those tasks succeed.
+
+    /// Begins initialization of a new [`Client`].
+    ///
+    /// The client will attempt to connect to the WAMP router at the given URL and join the given
+    /// realm; the future will not resolve until both of those tasks succeed.
     ///
     /// This method will handle initialization of the [`Transport`] used, but the caller must
-    /// specify which transport will be used.
+    /// specify the type of transport.
     ///
     /// The given [`Duration`] will be used as a timeout for protocol-level communications. In
     /// particular, it will *not* be used as a timeout for remote procedure calls. RPC timeouts
     /// can be specified in the [`Client::call`] method, if the `caller` Cargo feature is enabled
     /// (on by default).
-    pub fn new(url: &str, realm: Uri, timer_handle: timer::Handle, timeout: Duration) -> impl Future<Item=Self, Error=Error> {
-        let received: ReceivedValues = Default::default();
-        let (connect, mht) = T::connect(url, received.clone());
-        connect.and_then(move |transport| {
-            initialize::InitializeFuture::new(transport, received, realm, timer_handle, timeout)
+    pub fn new(
+        url: &str,
+        realm: Uri,
+        executor: runtime::TaskExecutor,
+        timeout: Duration
+    ) -> impl Future<Item = Self, Error = Error> {
+        let ConnectResult { future, message_handling_task, received_values } = T::connect(url);
+        executor.spawn(message_handling_task);
+        future.and_then(move |transport| {
+            initialize::InitializeFuture::new(transport, received_values, realm, timeout)
         })
-        // TODO also give back mht
     }
 
     //#[cfg(feature = "caller")]
@@ -134,6 +158,11 @@ impl <T: Transport> Client<T> {
     //fn unsubscribe(&mut self, subscription: Subscription) -> impl Future<Item=(), Error=Error> {
     //    unimplemented!()
     //}
+
+    /// Closes the connection to the server.
+    fn close(&mut self) {
+
+    }
 }
 
 struct RouterCapabilities {
