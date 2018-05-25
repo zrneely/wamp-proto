@@ -26,7 +26,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering}
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use failure::Error;
