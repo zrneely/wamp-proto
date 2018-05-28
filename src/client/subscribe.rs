@@ -1,7 +1,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use failure::Error;
 use futures::{Async, AsyncSink, Future};
@@ -37,7 +37,6 @@ pub struct SubscriptionFuture<T: Transport> {
     handler: Option<BroadcastHandler>,
     request_id: Id<GlobalScope>,
     timeout: Delay,
-    timeout_duration: Duration,
 
     subscriptions: Arc<Mutex<HashMap<Subscription, BroadcastHandler>>>,
 
@@ -57,7 +56,6 @@ impl <T: Transport> SubscriptionFuture<T> {
             topic, request_id,
             handler: Some(handler),
             timeout: Delay::new(Instant::now() + client.timeout_duration),
-            timeout_duration: client.timeout_duration,
 
             sender: client.sender.clone(),
             received: client.received.clone(),

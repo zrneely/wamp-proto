@@ -5,7 +5,6 @@ extern crate wamp_proto;
 
 use failure::Error;
 use futures::prelude::*;
-use futures::task::Context;
 use wamp_proto::{Transport, proto};
 
 struct MockTransport {

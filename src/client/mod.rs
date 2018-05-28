@@ -6,10 +6,8 @@ use std::time::Duration;
 use failure::Error;
 use futures::{Async, Future};
 use parking_lot::Mutex;
-use tokio::{
-    runtime,
-    timer::Delay,
-};
+use tokio::timer::Delay;
+use tokio_core::reactor;
 
 use {ConnectResult, Id, GlobalScope, ReceivedValues, RouterScope, Uri, TransportableValue as TV, Transport};
 use error::WampError;
@@ -48,7 +46,7 @@ pub struct Client<T: Transport> {
     sender: Arc<Mutex<T>>,
     received: ReceivedValues,
 
-    session: Id<GlobalScope>,
+    session_id: Id<GlobalScope>,
     timeout_duration: Duration,
     router_capabilities: RouterCapabilities,
 
@@ -72,14 +70,13 @@ impl <T: Transport> Client<T> {
     pub fn new(
         url: &str,
         realm: Uri,
-        executor: runtime::TaskExecutor,
+        handle: &reactor::Handle,
         timeout: Duration
-    ) -> impl Future<Item = Self, Error = Error> {
-        let ConnectResult { future, message_handling_task, received_values } = T::connect(url);
-        executor.spawn(message_handling_task);
-        future.and_then(move |transport| {
+    ) -> Result<impl Future<Item = Self, Error = Error>, Error> {
+        let ConnectResult { future, received_values } = T::connect(url, handle)?;
+        Ok(future.and_then(move |transport| {
             initialize::InitializeFuture::new(transport, received_values, realm, timeout)
-        })
+        }))
     }
 
     //#[cfg(feature = "caller")]
@@ -161,7 +158,7 @@ impl <T: Transport> Client<T> {
 
     /// Closes the connection to the server.
     fn close(&mut self) {
-
+        unimplemented!()
     }
 }
 

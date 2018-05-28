@@ -7,7 +7,6 @@
 //!
 //! This crate implements the WAMP basic profile, and (for now) *none* of the advanced profile.
 
-#![feature(never_type)]
 #![deny(missing_docs)]
 
 extern crate failure;
@@ -21,6 +20,16 @@ extern crate rand;
 extern crate regex;
 extern crate serde;
 extern crate tokio;
+extern crate tokio_core;
+
+#[cfg(feature = "ws_transport")]
+#[macro_use]
+extern crate serde_json;
+#[cfg(feature = "ws_transport")]
+#[macro_use]
+extern crate serde_derive;
+#[cfg(feature = "ws_transport")]
+extern crate websocket;
 
 use std::sync::{
     Arc,
@@ -34,6 +43,7 @@ use futures::prelude::*;
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
 use regex::Regex;
+use tokio_core::reactor;
 
 /// Contains protocol-level details.
 ///
@@ -43,10 +53,11 @@ pub mod proto;
 mod client;
 mod error;
 mod pollable;
+mod transport;
 
 pub use client::*;
 
-use pollable::PollableSet;
+use pollable::{PollableSet, UniquelyHashable};
 use proto::*;
 
 /// An RFC3989 URI.
@@ -60,7 +71,9 @@ use proto::*;
 ///
 /// An example of a well-formed URI is `"org.company.application.service"`.
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "ws_transport", derive(Serialize))]
 pub struct Uri {
+    #[cfg_attr(feature = "ws_transport", serde(flatten))]
     encoded: String,
 }
 impl Uri {
@@ -222,11 +235,6 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     /// The type of future returned when this transport opens a connection.
     type ConnectFuture: Future<Item = Self, Error = Error>;
 
-    /// The type of future used to drive the long-running message-parsing and RPC-invoking
-    /// task. It can never succeed, and any failures will be reported through the
-    /// [`ReceivedValues`] instance returned by the [`connect`] method.
-    type MessageHandlingTask: Future<Item = (), Error = ()> + Send + 'static;
-
     /// Asynchronously constructs a transport to the router at the given location.
     ///
     /// The format of the location string is implementation defined, but will probably be a URL.
@@ -235,12 +243,10 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     ///
     /// # Return Value
     ///
-    /// This method returns two futures. The first, when resolved, provides the actual transport
-    /// instance. The second will never resolve unless the underlying connection fails - it
-    /// represents a task which parses incoming messages and adds them to the correct
-    /// [`PollableSet`] in the given [`ReceivedValues`]. That task is also responsible for spawning
-    /// additional tasks for execution of RPCs invoked from other clients, if this was built with
-    /// the `callee` Cargo feature (on by default).
+    /// This method returns a future which, when resolved, provides the actual transport instance.
+    /// It also returns a shared [`ReceivedValues`]. This method is responsible for spwaning any
+    /// long-running task needed to populate that struct with data as it is received. Such a task
+    /// should be spawned using the provided [`reactor::Handle`].
     ///
     /// # Remarks
     ///
@@ -253,17 +259,14 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     /// # Panics
     ///
     /// This method should never panic. It should handle failures by returning [`Err`] from the
-    /// appropriate future.
-    fn connect(url: &str) -> ConnectResult<Self>;
+    /// appropriate future, or an Err() result for synchronous errors.
+    fn connect(url: &str, handle: &reactor::Handle) -> Result<ConnectResult<Self>, Error>;
 }
 
 /// The result of connecting to a channel.
 pub struct ConnectResult<T: Transport> {
     /// The task which will eventually provide the actual Transport object.
     pub future: T::ConnectFuture,
-    /// A long-running task which does the actual listening for messages and fires new tasks
-    /// for callbacks, RPCs, etc.
-    pub message_handling_task: T::MessageHandlingTask,
     /// The queue of incoming messages and outgoing commands to the message handling task.
     pub received_values: ReceivedValues,
 }
@@ -277,7 +280,7 @@ pub type TsPollSet<T> = Arc<Mutex<PollableSet<T>>>;
 
 /// Acts as a buffer for each type of returned message, and any possible errors
 /// (either in the transport layer or the protocol).
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ReceivedValues {
     /// The queue of incoming "WELCOME" messages.
     pub welcome: TsPollSet<rx::Welcome>,

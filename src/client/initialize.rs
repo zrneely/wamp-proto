@@ -113,7 +113,7 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
                             sender: self.sender.clone(),
                             received: self.received.clone(),
 
-                            session: msg.session,
+                            session_id: msg.session,
                             timeout_duration: self.timeout_duration,
                             router_capabilities: RouterCapabilities::from_details(&msg.details),
 
