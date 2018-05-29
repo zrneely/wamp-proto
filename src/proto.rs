@@ -1,7 +1,7 @@
 
 use std::collections::HashMap;
 
-use {GlobalScope, Id, RouterScope, TransportableValue, Uri};
+use {GlobalScope, Id, RouterScope, SessionScope, TransportableValue, Uri};
 
 /// Raw message codes for each message type.
 #[allow(missing_docs)]
@@ -51,7 +51,7 @@ pub enum TxMessage {
         reason: Uri,
     },
     Subscribe {
-        request: Id<GlobalScope>,
+        request: Id<SessionScope>,
         options: Dict,
         topic: Uri,
     },
@@ -66,9 +66,9 @@ pub mod rx {
     use super::*;
 
     /// Marker trait for received messages. Do not implement this yourself.
-    pub trait Message {
+    pub trait RxMessage {
         /// The identifying integer for this message.
-        const MSG_CODE: u8;
+        const MSG_CODE: u64;
     }
 
     #[derive(Debug, Eq, PartialEq)]
@@ -76,8 +76,8 @@ pub mod rx {
         pub session: Id<GlobalScope>,
         pub details: Dict,
     }
-    impl Message for Welcome {
-        const MSG_CODE: u8 = msg_code::WELCOME;
+    impl RxMessage for Welcome {
+        const MSG_CODE: u64 = msg_code::WELCOME as u64;
     }
 
     #[derive(Debug, Eq, PartialEq)]
@@ -85,8 +85,8 @@ pub mod rx {
         pub details: Dict,
         pub reason: Uri,
     }
-    impl Message for Abort {
-        const MSG_CODE: u8 = msg_code::ABORT;
+    impl RxMessage for Abort {
+        const MSG_CODE: u64 = msg_code::ABORT as u64;
     }
 
     #[derive(Debug, Eq, PartialEq)]
@@ -94,16 +94,16 @@ pub mod rx {
         pub details: Dict,
         pub reason: Uri,
     }
-    impl Message for Goodbye {
-        const MSG_CODE: u8 = msg_code::GOODBYE;
+    impl RxMessage for Goodbye {
+        const MSG_CODE: u64 = msg_code::GOODBYE as u64;
     }
 
     #[derive(Debug, Eq, PartialEq)]
     pub struct Subscribed {
-        pub request: Id<GlobalScope>,
+        pub request: Id<SessionScope>,
         pub subscription: Id<RouterScope>,
     }
-    impl Message for Subscribed {
-        const MSG_CODE: u8 = msg_code::SUBSCRIBED;
+    impl RxMessage for Subscribed {
+        const MSG_CODE: u64 = msg_code::SUBSCRIBED as u64;
     }
 }

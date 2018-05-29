@@ -8,7 +8,7 @@ use futures::{Async, AsyncSink, Future};
 use parking_lot::Mutex;
 use tokio::timer::Delay;
 
-use ::{Broadcast, Client, GlobalScope, Id, ReceivedValues, RouterScope, Transport, Uri};
+use ::{Broadcast, Client, Id, ReceivedValues, RouterScope, SessionScope, Transport, Uri};
 use proto::TxMessage;
 
 /// The result of subscribing to a channel. Can be used to unsubscribe.
@@ -35,7 +35,7 @@ pub struct SubscriptionFuture<T: Transport> {
 
     topic: Uri,
     handler: Option<BroadcastHandler>,
-    request_id: Id<GlobalScope>,
+    request_id: Id<SessionScope>,
     timeout: Delay,
 
     subscriptions: Arc<Mutex<HashMap<Subscription, BroadcastHandler>>>,
@@ -45,7 +45,7 @@ pub struct SubscriptionFuture<T: Transport> {
 }
 impl <T: Transport> SubscriptionFuture<T> {
     pub(crate) fn new(client: &mut Client<T>, topic: Uri, handler: BroadcastHandler) -> Self {
-        let request_id = Id::<GlobalScope>::generate();
+        let request_id = Id::<SessionScope>::next();
         SubscriptionFuture {
             state: SubscriptionFutureState::StartSendSubscribe(Some(TxMessage::Subscribe {
                 topic: topic.clone(),
@@ -77,6 +77,7 @@ impl <T: Transport> Future for SubscriptionFuture<T> {
                 // Step 1: Add the subscription request to the sender's message queue. If the queue
                 // is full, return NotReady.
                 SubscriptionFutureState::StartSendSubscribe(ref mut message) => {
+                    trace!("SubscriptionFutureState::StartSendSubscribe");
                     let message = message.take().expect("invalid SubscriptionFutureState");
                     match self.sender.lock().start_send(message)? {
                         AsyncSink::NotReady(message) => {
@@ -90,6 +91,7 @@ impl <T: Transport> Future for SubscriptionFuture<T> {
                 // Step 2: Wait for the sender's message queue to empty. If it's not empty, return
                 // NotReady.
                 SubscriptionFutureState::SendSubscribe => {
+                    trace!("SubscriptionFutureState::SendSubscribe");
                     match self.sender.lock().poll_complete()? {
                         Async::NotReady => {
                             pending = true;
@@ -103,6 +105,7 @@ impl <T: Transport> Future for SubscriptionFuture<T> {
                 // one, return NotReady. Through the magic of PollableSet, the current
                 // task will be notified when a new Subscribed message arrives.
                 SubscriptionFutureState::WaitSubscribed => {
+                    trace!("SubscriptionFutureState::WaitSubscribed");
                     match self.received.subscribed.lock().poll_take(
                         |msg| msg.request == self.request_id
                     ) {
@@ -111,6 +114,7 @@ impl <T: Transport> Future for SubscriptionFuture<T> {
                             SubscriptionFutureState::WaitSubscribed
                         }
                         Async::Ready(msg) => {
+                            info!("Subscribed to {:?} (ID: {:?})", self.topic, msg.subscription);
                             let subscription = Subscription {
                                 subscription_id: msg.subscription,
                                 topic: self.topic.clone(),

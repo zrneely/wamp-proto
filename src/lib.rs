@@ -15,6 +15,8 @@ extern crate failure_derive;
 extern crate futures;
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate log;
 extern crate parking_lot;
 extern crate rand;
 extern crate regex;
@@ -57,7 +59,7 @@ mod transport;
 
 pub use client::*;
 
-use pollable::{PollableSet, UniquelyHashable};
+use pollable::PollableSet;
 use proto::*;
 
 /// An RFC3989 URI.
@@ -77,6 +79,14 @@ pub struct Uri {
     encoded: String,
 }
 impl Uri {
+    /// Constructs a URI from a textual representation, skipping all validation.
+    ///
+    /// It is highly recommended to use [`relaxed`] or [`strict`] instead, unless you are writing
+    /// a transport implementation.
+    pub fn raw(text: String) -> Self {
+        Uri { encoded: text }
+    }
+
     /// Constructs and validates a URI from a textual representation.
     ///
     /// Returns `None` if validation fails.
@@ -134,6 +144,12 @@ pub struct Id<S> {
     value: u64,
     _pd: PhantomData<S>,
 }
+impl<S> Id<S> {
+    /// Creates an ID from a raw `u64`. Should not be used except by [`Transport`] implementations.
+    pub fn from_raw_value(value: u64) -> Self {
+        Id { value, _pd: PhantomData }
+    }
+}
 impl Id<GlobalScope> {
     /// Generates a random global ID.
     pub fn generate() -> Self {
@@ -168,7 +184,7 @@ impl Id<SessionScope> {
 // the transport).
 
 /// The types of value which can be sent over WAMP RPC and pub/sub boundaries.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TransportableValue {
     /// A non-negative integer.
     Integer(u64),
@@ -226,11 +242,15 @@ impl TransportableValue {
 /// A transport capable of supporting a WAMP connection.
 ///
 /// While WAMP was designed with Websockets in mind, any message transport can be used if it is
-/// message-based, bidirectional, ordered, and reliable. You can find transports in various crates
-/// named `wamp-transport-*`.
+/// message-based, bidirectional, ordered, and reliable. This crate includes one transport
+/// implementation, the default websocket-based one, in [`transport::websocket::WebsocketTransport`].
 ///
 /// A transport provides a [`Sink`] for [`TxMessage`] objects. It also provides what is effectively
 /// a [`Stream`] for each type of incoming message.
+///
+/// It is not the responsibility of the transport to associate meaning with any received messages.
+/// For example, a transport should *not* close itself upon receiving an ABORT message. It should also
+/// *not* look for or even be aware of out-of-order messages.
 pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     /// The type of future returned when this transport opens a connection.
     type ConnectFuture: Future<Item = Self, Error = Error>;
@@ -244,9 +264,17 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     /// # Return Value
     ///
     /// This method returns a future which, when resolved, provides the actual transport instance.
-    /// It also returns a shared [`ReceivedValues`]. This method is responsible for spwaning any
-    /// long-running task needed to populate that struct with data as it is received. Such a task
-    /// should be spawned using the provided [`reactor::Handle`].
+    /// It also returns a shared [`ReceivedValues`].
+    ///
+    /// # Panics
+    ///
+    /// This method should never panic. It should handle failures by returning [`Err`] from the
+    /// appropriate future, or an Err() result for synchronous errors.
+    fn connect(url: &str, handle: &reactor::Handle) -> Result<ConnectResult<Self>, Error>;
+
+    /// Spawns a long-running task which will listen for events and forward them to the
+    /// [`ReceivedValues`] returned by the [`connect`] method. Multiple calls to this method
+    /// have no effect beyond the first.
     ///
     /// # Remarks
     ///
@@ -258,9 +286,8 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     ///
     /// # Panics
     ///
-    /// This method should never panic. It should handle failures by returning [`Err`] from the
-    /// appropriate future, or an Err() result for synchronous errors.
-    fn connect(url: &str, handle: &reactor::Handle) -> Result<ConnectResult<Self>, Error>;
+    /// This method should never panic.
+    fn listen(&mut self, handle: &reactor::Handle);
 }
 
 /// The result of connecting to a channel.

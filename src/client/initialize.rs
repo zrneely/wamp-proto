@@ -81,6 +81,7 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
             self.state = match self.state {
                 // Step 1: Add the hello message to the sender's message queue.
                 InitializeFutureState::StartSendHello(ref mut message) => {
+                    trace!("InitializeFutureState::StartSendHello");
                     let message = message.take().expect("invalid InitializeFutureState");
                     match self.sender.lock().start_send(message)? {
                         AsyncSink::NotReady(message) => {
@@ -93,6 +94,7 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
 
                 // Step 2: Wait for the sender's message queue to empty.
                 InitializeFutureState::SendHello => {
+                    trace!("InitializeFutureState::SendHello");
                     match self.sender.lock().poll_complete()? {
                         Async::NotReady => {
                             pending = true;
@@ -104,21 +106,25 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
 
                 // Step 3: Wait for a rx::Welcome message.
                 InitializeFutureState::WaitWelcome => {
+                    trace!("InitializeFutureState::WaitWelcome");
                     match self.received.welcome.lock().poll_take(|_| true) {
                         Async::NotReady => {
                             pending = true;
                             InitializeFutureState::WaitWelcome
                         }
-                        Async::Ready(msg) => return Ok(Async::Ready(Client {
-                            sender: self.sender.clone(),
-                            received: self.received.clone(),
+                        Async::Ready(msg) => {
+                            info!("WAMP connection initialized with session ID {:?}", msg.session);
+                            return Ok(Async::Ready(Client {
+                                sender: self.sender.clone(),
+                                received: self.received.clone(),
 
-                            session_id: msg.session,
-                            timeout_duration: self.timeout_duration,
-                            router_capabilities: RouterCapabilities::from_details(&msg.details),
+                                session_id: msg.session,
+                                timeout_duration: self.timeout_duration,
+                                router_capabilities: RouterCapabilities::from_details(&msg.details),
 
-                            subscriptions: Arc::new(Mutex::new(HashMap::new())),
-                        }))
+                                subscriptions: Arc::new(Mutex::new(HashMap::new())),
+                            }))
+                        }
                     }
                 }
             };
