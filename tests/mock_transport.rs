@@ -1,4 +1,4 @@
-
+/*
 extern crate failure;
 extern crate futures;
 extern crate wamp_proto;
@@ -43,8 +43,9 @@ impl Sink for MockTransport {
             Ok(Async::Ready)
         }
     }
-    
+
 }
 impl Transport for MockTransport {
-    
+
 }
+*/

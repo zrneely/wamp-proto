@@ -25,7 +25,10 @@ use proto::{
     rx::{self, RxMessage},
     TxMessage,
 };
-use {ConnectResult, GlobalScope, Id, ReceivedValues, RouterScope, SessionScope, Transport, TransportableValue, Uri};
+use {
+    ConnectResult, GlobalScope, Id, ReceivedValues, RouterScope, SessionScope,
+    Transport, TransportableValue, Uri
+};
 
 /// An implementation of a websocket-based WAMP Transport.
 pub struct WebsocketTransport {
@@ -291,6 +294,7 @@ impl WebsocketTransportListener {
     }
 }
 
+/// Returned by [`WebsocketTransport::Connect`]; resolves to a [`WebsocketTransport`].
 pub struct WebsocketTransportConnectFuture {
     future: ClientNew<TcpStream>,
     received_values: Option<ReceivedValues>,
@@ -316,5 +320,34 @@ impl Future for WebsocketTransportConnectFuture {
                 }))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_to_tv_test_integer() {
+        assert_eq!(
+            Some(TransportableValue::Integer(4)),
+            WebsocketTransportListener::json_to_tv(&json!(4))
+        );
+        assert_eq!(
+            Some(TransportableValue::Integer(0)),
+            WebsocketTransportListener::json_to_tv(&json!(0))
+        );
+        assert_eq!(
+            Some(TransportableValue::Integer(0x7FFF_FFFF_FFFF_FFFF)),
+            WebsocketTransportListener::json_to_tv(&json!(0x7FFF_FFFF_FFFF_FFFFu64))
+        );
+        assert_eq!(
+            None,
+            WebsocketTransportListener::json_to_tv(&json!(-1))
+        );
+        assert_eq!(
+            None,
+            WebsocketTransportListener::json_to_tv(&json!(-3))
+        );
     }
 }

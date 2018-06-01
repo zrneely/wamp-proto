@@ -51,11 +51,12 @@ use tokio_core::reactor;
 ///
 /// If you aren't defining your own transport type, you shouldn't need to worry about this module.
 pub mod proto;
+/// Contains `Transport` implementations.
+pub mod transport;
 
 mod client;
 mod error;
 mod pollable;
-mod transport;
 
 pub use client::*;
 
@@ -93,7 +94,7 @@ impl Uri {
     pub fn relaxed(text: String) -> Option<Self> {
         lazy_static! {
             // regex taken from WAMP specification
-            static ref RE: Regex = Regex::new(r"^(([^\s\.#]+\.)|\.)*([^\s\.#]+)$").unwrap();
+            static ref RE: Regex = Regex::new(r"^([^\s\.#]+\.)*([^\s\.#]+)$").unwrap();
         }
         if RE.is_match(&text) && !text.starts_with("wamp.") {
             Some(Uri { encoded: text })
@@ -321,4 +322,92 @@ pub struct ReceivedValues {
     /// A buffer of received errors. If an error is ever added, it is expected that
     /// no further messages are ever received.
     pub errors: Arc<Mutex<Option<Error>>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uri_raw_test() {
+        assert_eq!("foo", Uri::raw("foo".into()).encoded);
+        assert_eq!("~~~~1234_*()", Uri::raw("~~~~1234_*()".into()).encoded);
+    }
+
+    #[test]
+    fn uri_relaxed_test() {
+        let positive_tests = [
+            "a.b.c.d123",
+            "com.foobar.xyz~`$@!%^%",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "a,.b,c.d",
+            "A.b.C.d",
+        ];
+        let negative_tests = [
+            "wamp.f",
+            "a.#.c.d",
+            "..",
+            "a..b.c.d",
+            "a. .b.c.d",
+            "a .b.c.d",
+        ];
+
+        for &test in positive_tests.iter() {
+            println!("asserting that {} is a valid relaxed URI", test);
+            assert!(Uri::relaxed(test.into()).is_some());
+        }
+
+        for &test in negative_tests.iter() {
+            println!("asserting that {} is an invalid relaxed URI", test);
+            assert!(Uri::relaxed(test.into()).is_none());
+        }
+    }
+
+    #[test]
+    fn uri_strict_test() {
+        let positive_tests = [
+            "a.b.c.d",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "a_.b_c.d123",
+            "..",
+            "a..b.c.d",
+        ];
+        let negative_tests = [
+            "wamp.f",
+            "com.foobar.xyz~`$@!%^%",
+            "A.b.C.d",
+            "a.#.c.d",
+            "a. .b.c.d",
+            "a .b.c.d",
+            "45.$$$",
+            "-=-=-=-=-",
+        ];
+
+        for &test in positive_tests.iter() {
+            println!("asserting that {} is a valid strict URI", test);
+            assert!(Uri::strict(test.into()).is_some());
+        }
+
+        for &test in negative_tests.iter() {
+            println!("asserting that {} is an invalid strict URI", test);
+            assert!(Uri::strict(test.into()).is_none());
+        }
+    }
+
+    #[test]
+    fn id_global_test() {
+        unimplemented!();
+    }
+
+    #[test]
+    fn id_router_test() {
+        unimplemented!();
+    }
+
+    #[test]
+    fn id_scope_test() {
+        unimplemented!();
+    }
+
+    // TODO ensure that JSON serialization works as expected
 }
