@@ -70,6 +70,11 @@ impl <T> PollableSet<T> {
         }
     }
 
+    /// Queries the size of the set at this particular instant.
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
     /// Looks for a value in the set matching the given predicate. If one is found, returns it and
     /// removes it from the set. If not, registers the current [`task`]'s interest in the set and
     /// will notify the task when a value is added.

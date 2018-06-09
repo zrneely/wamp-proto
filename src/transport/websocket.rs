@@ -175,7 +175,7 @@ impl WebsocketTransportListener {
             return;
         }
 
-        if let Some(TransportableValue::Dict(details_)) = Self::json_to_tv(&msg[1]) {
+        if let Some(TransportableValue::Dict(details_)) = json_to_tv(&msg[1]) {
             details = details_;
         } else {
             warn!("bad WELCOME message details {:?}", msg[1]);
@@ -195,7 +195,7 @@ impl WebsocketTransportListener {
         let details: HashMap<String, TransportableValue>;
         let reason: Uri;
 
-        if let Some(TransportableValue::Dict(details_)) = Self::json_to_tv(&msg[0]) {
+        if let Some(TransportableValue::Dict(details_)) = json_to_tv(&msg[0]) {
             details = details_;
         } else {
             warn!("bad ABORT message details {:?}", msg[0]);
@@ -222,7 +222,7 @@ impl WebsocketTransportListener {
         let details: HashMap<String, TransportableValue>;
         let reason: Uri;
 
-        if let Some(TransportableValue::Dict(details_)) = Self::json_to_tv(&msg[0]) {
+        if let Some(TransportableValue::Dict(details_)) = json_to_tv(&msg[0]) {
             details = details_;
         } else {
             warn!("bad GOODBYE message details {:?}", msg[0]);
@@ -266,32 +266,32 @@ impl WebsocketTransportListener {
         trace!("Adding SUBSCRIBED message: {:?} {:?}", request, subscription);
         self.received_values.subscribed.lock().insert(rx::Subscribed { request, subscription });
     }
+}
 
-    fn json_to_tv(value: &Value) -> Option<TransportableValue> {
-        Some(match value {
-            Value::Null => return None,
-            Value::Bool(val) => TransportableValue::Bool(*val),
-            Value::Number(num) => if let Some(val) = num.as_u64() {
-                TransportableValue::Integer(val)
-            } else {
-                warn!("skipping negative or floating point number {:?}", num);
-                return None
-            }
-            Value::String(val) => TransportableValue::String(val.clone()),
-            Value::Array(vals) => TransportableValue::List(
-                vals.into_iter().filter_map(Self::json_to_tv).collect()
-            ),
-            Value::Object(vals) => {
-                let mut result = HashMap::<String, TransportableValue>::new();
-                for (k, v) in vals {
-                    if let Some(val) = Self::json_to_tv(v) {
-                        result.insert(k.clone(), val);
-                    }
+fn json_to_tv(value: &Value) -> Option<TransportableValue> {
+    Some(match value {
+        Value::Null => return None,
+        Value::Bool(val) => TransportableValue::Bool(*val),
+        Value::Number(num) => if let Some(val) = num.as_u64() {
+            TransportableValue::Integer(val)
+        } else {
+            warn!("skipping negative or floating point number {:?}", num);
+            return None
+        }
+        Value::String(val) => TransportableValue::String(val.clone()),
+        Value::Array(vals) => TransportableValue::List(
+            vals.into_iter().filter_map(json_to_tv).collect()
+        ),
+        Value::Object(vals) => {
+            let mut result = HashMap::<String, TransportableValue>::new();
+            for (k, v) in vals {
+                if let Some(val) = json_to_tv(v) {
+                    result.insert(k.clone(), val);
                 }
-                TransportableValue::Dict(result)
             }
-        })
-    }
+            TransportableValue::Dict(result)
+        }
+    })
 }
 
 /// Returned by [`WebsocketTransport::Connect`]; resolves to a [`WebsocketTransport`].
@@ -331,23 +331,55 @@ mod tests {
     fn json_to_tv_test_integer() {
         assert_eq!(
             Some(TransportableValue::Integer(4)),
-            WebsocketTransportListener::json_to_tv(&json!(4))
+            json_to_tv(&json!(4))
         );
         assert_eq!(
             Some(TransportableValue::Integer(0)),
-            WebsocketTransportListener::json_to_tv(&json!(0))
+            json_to_tv(&json!(0))
         );
         assert_eq!(
             Some(TransportableValue::Integer(0x7FFF_FFFF_FFFF_FFFF)),
-            WebsocketTransportListener::json_to_tv(&json!(0x7FFF_FFFF_FFFF_FFFFu64))
+            json_to_tv(&json!(0x7FFF_FFFF_FFFF_FFFFu64))
         );
         assert_eq!(
             None,
-            WebsocketTransportListener::json_to_tv(&json!(-1))
+            json_to_tv(&json!(-1))
         );
         assert_eq!(
             None,
-            WebsocketTransportListener::json_to_tv(&json!(-3))
+            json_to_tv(&json!(-3))
         );
+    }
+
+    // TODO test all the handle_* methods
+
+    #[test]
+    fn handle_welcome_test() {
+        let mut core = ::tokio_core::reactor::Core::new().unwrap();
+
+        let rv = ReceivedValues::default();
+        let mut listener = WebsocketTransportListener {
+            stream: unsafe { ::std::mem::uninitialized() },
+            received_values: rv.clone(),
+        };
+
+        // TODO negative test cases
+
+        listener.handle_welcome(&[json!(12345), json!({"x": 1, "y": true})]);
+        assert_eq!(1, rv.welcome.lock().len());
+        let query = future::poll_fn(|| {
+            let val = try_ready!({
+                let res: Result<_, &'static str> = Ok(rv.welcome.lock().poll_take(|_| true));
+                res
+            });
+            if Id::<GlobalScope>::from_raw_value(12345) != val.session {
+                return Err("session id did not match")
+            }
+            if 2 != val.details.len() {
+                return Err("details dict did not match")
+            }
+            Ok(Async::Ready(()))
+        });
+        assert!(core.run(query).is_ok());
     }
 }
