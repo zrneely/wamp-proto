@@ -341,7 +341,6 @@ mod tests {
 
     use std::io::{self, prelude::*};
     use std::sync::Arc;
-    use futures::future;
     use parking_lot::Mutex;
 
     #[derive(Clone)]
