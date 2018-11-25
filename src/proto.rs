@@ -65,41 +65,55 @@ pub enum TxMessage {
 pub mod rx {
     use super::*;
 
+    macro_rules! rx_message_type {
+        ($name:ident [ $code_name:ident ] { $($fields:tt)* }) => {
+            #[derive(Debug, Eq, PartialEq)]
+            pub struct $name {
+                $($fields)*
+            }
+            impl RxMessage for $name {
+                const MSG_CODE: u64 = msg_code::$code_name as u64;
+            }
+        };
+    }
+
     /// Marker trait for received messages. Do not implement this yourself.
     pub trait RxMessage {
         /// The identifying integer for this message.
         const MSG_CODE: u64;
     }
 
-    #[derive(Debug, Eq, PartialEq)]
-    pub struct Welcome {
+    // Session management; used by all types of peers.
+    rx_message_type!(Welcome [WELCOME] {
         pub session: Id<GlobalScope>,
         pub details: Dict,
-    }
-    impl RxMessage for Welcome {
-        const MSG_CODE: u64 = msg_code::WELCOME as u64;
-    }
+    });
 
-    #[derive(Debug, Eq, PartialEq)]
-    pub struct Abort {
+    // Session management; used by all types of peers.
+    rx_message_type!(Abort [ABORT] {
         pub details: Dict,
         pub reason: Uri,
-    }
-    impl RxMessage for Abort {
-        const MSG_CODE: u64 = msg_code::ABORT as u64;
-    }
+    });
 
-    #[derive(Debug, Eq, PartialEq)]
-    pub struct Goodbye {
+    // Session management; used by all types of peers.
+    rx_message_type!(Goodbye [GOODBYE] {
         pub details: Dict,
         pub reason: Uri,
-    }
-    impl RxMessage for Goodbye {
-        const MSG_CODE: u64 = msg_code::GOODBYE as u64;
-    }
+    });
 
-    #[derive(Debug, Eq, PartialEq)]
-    pub struct Subscribed {
+    // Message type used by all roles to indicate problems with a request.
+    rx_message_type!(Error [ERROR] {
+        pub request_type: u64,
+        pub request: Id<SessionScope>,
+        pub details: Dict,
+        pub error: Uri,
+        pub arguments: Option<List>,
+        pub arguments_kw: Option<Dict>,
+    });
+
+    // Sent by brokers to subscribers after they are subscribed to a topic.
+    #[cfg(feature = "subscriber")]
+    rx_message_type!(Subscribed [SUBSCRIBED] {
         pub request: Id<SessionScope>,
         pub subscription: Id<RouterScope>,
     }

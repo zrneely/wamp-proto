@@ -10,7 +10,7 @@ use futures::{
     stream::{Stream, SplitSink, SplitStream},
 };
 use serde_json::{self, Value};
-use tokio_core::reactor;
+use tokio::reactor;
 use websocket::{
     ClientBuilder,
     async::{
@@ -72,8 +72,8 @@ impl Sink for WebsocketTransport {
 impl Transport for WebsocketTransport {
     type ConnectFuture = WebsocketTransportConnectFuture;
 
-    fn connect(url: &str, handle: &reactor::Handle) -> Result<ConnectResult<Self>, Error> {
-        let client_future = ClientBuilder::new(url)?.async_connect_insecure(handle);
+    fn connect(url: &str) -> Result<ConnectResult<Self>, Error> {
+        let client_future = ClientBuilder::new(url)?.async_connect_insecure(&reactor::Handle::current());
         let received_values = ReceivedValues::default();
 
         Ok(ConnectResult {
@@ -85,9 +85,9 @@ impl Transport for WebsocketTransport {
         })
     }
 
-    fn listen(&mut self, handle: &reactor::Handle) {
+    fn listen(&mut self) {
         if let (Some(stream), Some(received_values)) = (self.stream.take(), self.received_values.take()) {
-            handle.spawn(WebsocketTransportListener { stream, received_values });
+            tokio::spawn(WebsocketTransportListener { stream, received_values });
         } else {
             warn!("WebsocketTransport::listen called multiple times!");
         }
@@ -203,7 +203,12 @@ impl WebsocketTransportListener {
         }
 
         if let Some(uri_str) = msg[1].as_str() {
-            reason = Uri::raw(uri_str.into());
+            if let Some(reason_) = Uri::relaxed(uri_str) {
+                reason = reason_;
+            } else {
+                warn!("bad URI in ABORT message reason {:?}", msg[1]);
+                return;
+            }
         } else {
             warn!("bad ABORT message reason {:?}", msg[1]);
             return;
@@ -230,7 +235,12 @@ impl WebsocketTransportListener {
         }
 
         if let Some(uri_str) = msg[1].as_str() {
-            reason = Uri::raw(uri_str.into());
+            if let Some(reason_) = Uri::relaxed(uri_str) {
+                reason = reason_;
+            } else {
+                warn!("bad URI in GOODBYE message reason {:?}", msg[1]);
+                return;
+            }
         } else {
             warn!("bad GOODBYE message reason {:?}", msg[1]);
             return;
@@ -326,6 +336,8 @@ impl Future for WebsocketTransportConnectFuture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::future::poll_fn;
+    use tokio::runtime::current_thread;
 
     #[test]
     fn json_to_tv_test_integer() {
@@ -355,7 +367,11 @@ mod tests {
 
     #[test]
     fn handle_welcome_test() {
-        let mut core = ::tokio_core::reactor::Core::new().unwrap();
+        let rv = ReceivedValues::default();
+        let mut listener = WebsocketTransportListener {
+            stream: unsafe { ::std::mem::uninitialized() },
+            received_values: rv.clone(),
+        };
 
         let rv = ReceivedValues::default();
         let mut listener = WebsocketTransportListener {
