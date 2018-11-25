@@ -21,7 +21,6 @@ use websocket::{
 };
 
 use proto::{
-    msg_code,
     rx::{self, RxMessage},
     TxMessage,
 };
@@ -43,25 +42,7 @@ impl Sink for WebsocketTransport {
     type SinkError = Error;
 
     fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
-        let value: serde_json::Value = match item {
-            TxMessage::Hello { ref realm, ref details } => json!([
-                msg_code::HELLO,
-                realm.clone(),
-                details,
-            ]),
-            TxMessage::Goodbye { ref details, ref reason } => json!([
-                msg_code::GOODBYE,
-                details,
-                reason.clone(),
-            ]),
-            TxMessage::Subscribe { ref request, ref options, ref topic } => json!([
-                msg_code::SUBSCRIBE,
-                request,
-                options,
-                topic,
-            ]),
-            _ => unimplemented!()
-        };
+        let value = item.to_json();
         self.client.start_send(Message::text(serde_json::to_string(&value)?).into()).map(|async| {
             match async {
                 AsyncSink::NotReady(_) => AsyncSink::NotReady(item),

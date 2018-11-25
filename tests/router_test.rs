@@ -27,7 +27,7 @@ fn integration_1() {
     }).map(|v| {
         println!("subscribed! result: {:?}", v);
         ()
-    }).map_err(|e| { panic!("error: {:?}", e); () });
+    }).map_err(|e| { panic!("error: {:?}", e) });
 
     tokio::run(future);
 }

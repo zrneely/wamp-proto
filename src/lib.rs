@@ -45,7 +45,6 @@ use futures::prelude::*;
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
 use regex::Regex;
-use tokio::reactor;
 
 #[cfg(feature = "ws_transport")]
 use serde::{
@@ -130,6 +129,11 @@ impl Uri {
         } else {
             None
         }
+    }
+}
+impl fmt::Display for Uri {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 

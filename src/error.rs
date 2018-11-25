@@ -1,4 +1,6 @@
 
+use {Id, SessionScope, Uri};
+
 /// An error produced by the WAMP crate directly.
 #[derive(Debug, Fail)]
 pub enum WampError {
@@ -23,4 +25,11 @@ pub enum WampError {
     /// The router does not support a required role.
     #[fail(display = "router does not support required role")]
     RouterSupportMissing,
+
+    #[fail(display = "router responded with error \"{}\"", error)]
+    ErrorReceived {
+        error: Uri,
+        request_type: u64,
+        request_id: Id<SessionScope>,
+    }
 }

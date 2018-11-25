@@ -6,7 +6,7 @@ use std::time::Duration;
 use failure::Error;
 use futures::{Async, Future};
 use parking_lot::Mutex;
-use tokio::{timer::Delay, reactor};
+use tokio::timer::Delay;
 
 use {ConnectResult, Id, GlobalScope, ReceivedValues, RouterScope, Uri, TransportableValue as TV, Transport};
 use error::WampError;
