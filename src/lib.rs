@@ -45,6 +45,7 @@ use futures::prelude::*;
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
 use regex::Regex;
+use tokio::reactor;
 
 #[cfg(feature = "ws_transport")]
 use serde::{
@@ -57,8 +58,10 @@ use serde::{
 ///
 /// If you aren't defining your own transport type, you shouldn't need to worry about this module.
 pub mod proto;
+
 /// Contains [`Transport`] implementations.
 pub mod transport;
+
 /// Useful types for [`Transport`] implementations.
 pub mod pollable;
 
@@ -99,13 +102,14 @@ impl Uri {
     /// Constructs and validates a URI from a textual representation.
     ///
     /// Returns `None` if validation fails.
-    pub fn relaxed(text: String) -> Option<Self> {
+    pub fn relaxed<T: AsRef<str>>(text: T) -> Option<Self> {
         lazy_static! {
             // regex taken from WAMP specification
             static ref RE: Regex = Regex::new(r"^([^\s\.#]+\.)*([^\s\.#]+)$").unwrap();
         }
-        if RE.is_match(&text) && !text.starts_with("wamp.") {
-            Some(Uri(text))
+
+        if RE.is_match(&text.as_ref()) && !text.as_ref().starts_with("wamp.") {
+            Some(Uri(text.as_ref().to_string()))
         } else {
             None
         }
@@ -115,13 +119,14 @@ impl Uri {
     ///
     /// Returns `None` if validation fails. A strict validation enforces that URI components only
     /// contain lower-case letters, digits, and "_".
-    pub fn strict(text: String) -> Option<Self> {
+    pub fn strict<T: AsRef<str>>(text: T) -> Option<Self> {
         lazy_static! {
             // regex taken from WAMP specification
             static ref RE: Regex = Regex::new(r"^(([0-9a-z_]+\.)|\.)*([0-9a-z_]+)?$").unwrap();
         }
-        if RE.is_match(&text) && !text.starts_with("wamp.") {
-            Some(Uri(text))
+
+        if RE.is_match(&text.as_ref()) && !text.as_ref().starts_with("wamp.") {
+            Some(Uri(text.as_ref().to_string()))
         } else {
             None
         }
@@ -149,9 +154,9 @@ pub enum SessionScope {}
 /// The type parameter should be one of [`GlobalScope`], [`RouterScope`], or [`SessionScope`]. It
 /// is a compile time-only value which describes the scope of the ID.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub struct Id<S> {
+pub struct Id<Scope> {
     value: u64,
-    _pd: PhantomData<S>,
+    _pd: PhantomData<Scope>,
 }
 impl<Scope> Serialize for Id<Scope> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -193,7 +198,7 @@ impl<'de> Visitor<'de> for ScopeVisitor {
         }
     }
 }
-impl<S> Id<S> {
+impl<Scope> Id<Scope> {
     /// Creates an ID from a raw `u64`. Should not be used except by [`Transport`] implementations.
     pub fn from_raw_value(value: u64) -> Self {
         Id { value, _pd: PhantomData }
@@ -222,7 +227,7 @@ impl Id<SessionScope> {
         Id {
             // This could maybe be Ordering::Relaxed, but I'm not sure and I don't want
             // to risk it. This section of code is probably not particularly performance-
-            // critical anyway, so the tradeoff is not worth it IMO.
+            // critical anyway, so the tradeoff is not worth it.
             value: NEXT.fetch_add(1, Ordering::SeqCst) as u64,
             _pd: PhantomData,
         }
@@ -318,8 +323,8 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     ///
     /// # Panics
     ///
-    /// This method should never panic. It should handle failures by returning [`Err`] from the
-    /// appropriate future, or an Err() result for synchronous errors.
+    /// This method may panic if not called under a tokio runtime. It should handle failures by returning
+    /// [`Err`] from the appropriate future, or an Err() result for synchronous errors.
     fn connect(url: &str) -> Result<ConnectResult<Self>, Error>;
 
     /// Spawns a long-running task which will listen for events and forward them to the
@@ -336,7 +341,7 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     ///
     /// # Panics
     ///
-    /// This method should never panic.
+    /// This method will panic if not called under a tokio runtime.
     fn listen(&mut self);
 }
 
@@ -357,7 +362,7 @@ pub type TsPollSet<T> = Arc<Mutex<PollableSet<T>>>;
 
 /// Acts as a buffer for each type of returned message, and any possible errors
 /// (either in the transport layer or the protocol).
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct ReceivedValues {
     /// The queue of incoming "WELCOME" messages.
     pub welcome: TsPollSet<rx::Welcome>,
@@ -365,12 +370,65 @@ pub struct ReceivedValues {
     pub abort: TsPollSet<rx::Abort>,
     /// The buffer of incoming "GOODBYE" messages.
     pub goodbye: TsPollSet<rx::Goodbye>,
-    /// The buffer of incoming "SUBSCRIBED" messages.
-    pub subscribed: TsPollSet<rx::Subscribed>,
+    /// The buffer of incoming "ERROR" messages.
+    pub error: TsPollSet<rx::Error>,
 
-    /// A buffer of received errors. If an error is ever added, it is expected that
-    /// no further messages are ever received.
-    pub errors: Arc<Mutex<Option<Error>>>,
+    /// The buffer of incoming "SUBSCRIBED" messages.
+    #[cfg(feature = "subscriber")]
+    pub subscribed: TsPollSet<rx::Subscribed>,
+    /// The buffer of incoming "UNSUBSCRIBED" messages.
+    #[cfg(feature = "subscriber")]
+    pub unsubscribed: TsPollSet<rx::Unsubscribed>,
+    /// The buffer of incoming "EVENT" messages.
+    #[cfg(feature = "subscriber")]
+    pub event: TsPollSet<rx::Event>,
+
+    /// The buffer of incoming "PUBLISHED" messages.
+    #[cfg(feature = "publisher")]
+    pub published: TsPollSet<rx::Published>,
+
+    /// The buffer of incoming "REGISTERED" messages.
+    #[cfg(feature = "callee")]
+    pub registered: TsPollSet<rx::Registered>,
+    /// The buffer of incoming "UNREGISTERED" messages.
+    #[cfg(feature = "callee")]
+    pub unregistered: TsPollSet<rx::Unregistered>,
+    /// The buffer of incoming "INVOCATION" messages.
+    #[cfg(feature = "callee")]
+    pub invocation: TsPollSet<rx::Invocation>,
+
+    /// The buffer of incoming "RESULT" messages.
+    #[cfg(feature = "caller")]
+    pub result: TsPollSet<rx::Result>,
+}
+impl ReceivedValues {
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        let mut len = self.welcome.lock().len() + self.abort.lock().len() +
+            self.goodbye.lock().len() + self.error.lock().len();
+
+        #[cfg(feature = "subscriber")]
+        {
+            len += self.subscribed.lock().len() + self.unsubscribed.lock().len() + self.event.lock().len();
+        }
+
+        #[cfg(feature = "publisher")]
+        {
+            len += self.published.lock().len();
+        }
+
+        #[cfg(feature = "callee")]
+        {
+            len += self.registered.lock().len() + self.unregistered.lock().len() + self.invocation.lock().len();
+        }
+
+        #[cfg(feature = "caller")]
+        {
+            len += self.result.lock().len();
+        }
+
+        len
+    }
 }
 
 #[cfg(test)]
@@ -403,12 +461,12 @@ mod tests {
 
         for &test in positive_tests.iter() {
             println!("asserting that {} is a valid relaxed URI", test);
-            assert!(Uri::relaxed(test.into()).is_some());
+            assert!(Uri::relaxed(test).is_some());
         }
 
         for &test in negative_tests.iter() {
             println!("asserting that {} is an invalid relaxed URI", test);
-            assert!(Uri::relaxed(test.into()).is_none());
+            assert!(Uri::relaxed(test).is_none());
         }
     }
 
@@ -434,12 +492,12 @@ mod tests {
 
         for &test in positive_tests.iter() {
             println!("asserting that {} is a valid strict URI", test);
-            assert!(Uri::strict(test.into()).is_some());
+            assert!(Uri::strict(test).is_some());
         }
 
         for &test in negative_tests.iter() {
             println!("asserting that {} is an invalid strict URI", test);
-            assert!(Uri::strict(test.into()).is_none());
+            assert!(Uri::strict(test).is_none());
         }
     }
 
@@ -558,7 +616,7 @@ mod tests {
     #[cfg(feature = "ws_transport")]
     #[test]
     fn uri_serialization_test() {
-        let uri = Uri::strict("a.b.c.d".into()).unwrap();
+        let uri = Uri::strict("a.b.c.d").unwrap();
 
         let value = serde_json::to_value(uri).unwrap();
         assert_eq!(json!("a.b.c.d"), value);
