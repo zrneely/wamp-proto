@@ -363,8 +363,6 @@ mod tests {
         );
     }
 
-    // TODO test all the handle_* methods
-
     #[test]
     fn handle_welcome_test() {
         let rv = ReceivedValues::default();
@@ -373,29 +371,262 @@ mod tests {
             received_values: rv.clone(),
         };
 
+        println!("Scenario 0: happy path");
+        listener.handle_welcome(&[json!(12345), json!({"x": 1, "y": true})]);
+        assert_eq!(1, rv.welcome.lock().len());
+        assert_eq!(1, rv.len());
+        let query = poll_fn(|| {
+            let val = try_ready!({
+                let res: Result<_, &'static str> = Ok(rv.welcome.lock().poll_take(|_| true));
+                res
+            });
+            if Id::<GlobalScope>::from_raw_value(12345) != val.session {
+                return Err(format!("session id {:?} did not match", val.session))
+            }
+            if 2 != val.details.len() {
+                return Err(format!("details dict {:?} did not match", val.details))
+            }
+            Ok(Async::Ready(()))
+        });
+        assert_eq!(current_thread::block_on_all(query), Ok(()));
+
+        println!("Scenario 1: 'Session' is not a number");
+        listener.handle_welcome(&[json!("foobar"), json!({"x": 1, "y": true})]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 2: 'Details' is not a dictionary");
+        listener.handle_welcome(&[json!(12345), json!("foobar")]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 3: Not enough arguments");
+        listener.handle_welcome(&[json!(12345)]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 4: Too many arguments");
+        listener.handle_welcome(&[json!(12345), json!({"x": 1, "y": true}), json!("foobar")]);
+        assert_eq!(0, rv.len());
+    }
+
+    #[test]
+    fn handle_abort_test() {
         let rv = ReceivedValues::default();
         let mut listener = WebsocketTransportListener {
             stream: unsafe { ::std::mem::uninitialized() },
             received_values: rv.clone(),
         };
 
-        // TODO negative test cases
+        println!("Scenario 0: happy path");
+        listener.handle_abort(&[json!({"x": 1, "y": true}), json!("org.foo.bar.error")]);
+        assert_eq!(1, rv.abort.lock().len());
+        assert_eq!(1, rv.len());
+        let query = poll_fn(|| {
+            let val = try_ready!({
+                let res: Result<_, &'static str> = Ok(rv.abort.lock().poll_take(|_| true));
+                res
+            });
+            if 2 != val.details.len() {
+                return Err(format!("details dict {:?} did not match", val.details));
+            }
+            if "org.foo.bar.error" != val.reason.0 {
+                return Err(format!("reason URI {:?} did not match", val.reason));
+            }
+            Ok(Async::Ready(()))
+        });
+        assert_eq!(current_thread::block_on_all(query), Ok(()));
 
-        listener.handle_welcome(&[json!(12345), json!({"x": 1, "y": true})]);
+        println!("Scenario 1: 'Details' is not a dictionary");
+        listener.handle_abort(&[json!("foobar"), json!("org.foo.bar.error")]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 2: 'Reason' is not a string");
+        listener.handle_abort(&[json!({"x": 1, "y": true}), json!(12345)]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 3: 'Reason' is not a valid URI");
+        listener.handle_abort(&[json!({"x": 1, "y": true}), json!("..")]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 4: Not enough arguments");
+        listener.handle_abort(&[json!({"x": 1, "y": true})]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 5: Too many arguments");
+        listener.handle_abort(&[json!({"x": 1, "y": true}), json!("org.foo.bar.error"), json!(12345)]);
+        assert_eq!(0, rv.len());
+    }
+
+    #[test]
+    fn handle_goodbye_test() {
+        let rv = ReceivedValues::default();
+        let mut listener = WebsocketTransportListener {
+            stream: unsafe { ::std::mem::uninitialized() },
+            received_values: rv.clone(),
+        };
+
+        println!("Scenario 0: happy path");
+        listener.handle_goodbye(&[json!({"x": 1, "y": true}), json!("org.foo.bar.closed")]);
+        assert_eq!(1, rv.goodbye.lock().len());
+        assert_eq!(1, rv.len());
+        let query = poll_fn(|| {
+            let val = try_ready!({
+                let res: Result<_, &'static str> = Ok(rv.goodbye.lock().poll_take(|_| true));
+                res
+            });
+            if 2 != val.details.len() {
+                return Err(format!("details dict {:?} did not match", val.details));
+            }
+            if "org.foo.bar.closed" != val.reason.0 {
+                return Err(format!("reason URI {:?} did not match", val.reason));
+            }
+            Ok(Async::Ready(()))
+        });
+        assert_eq!(current_thread::block_on_all(query), Ok(()));
+
+        println!("Scenario 1: 'Details' is not a dictionary");
+        listener.handle_goodbye(&[json!("foobar"), json!("org.foo.bar.closed")]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 2: 'Reason' is not a string");
+        listener.handle_goodbye(&[json!({"x": 1, "y": true}), json!(12345)]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 3: 'Reason' is not a valid URI");
+        listener.handle_goodbye(&[json!({"x": 1, "y": true}), json!("..")]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 4: Not enough arguments");
+        listener.handle_goodbye(&[json!({"x": 1, "y": true})]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 5: Too many arguments");
+        listener.handle_goodbye(&[json!({"x": 1, "y": true}), json!("org.foo.bar.closed"), json!(12345)]);
+        assert_eq!(0, rv.len());
+    }
+
+    #[cfg(feature = "subscriber")]
+    #[test]
+    fn handle_subscribed_test() {
+        let rv = ReceivedValues::default();
+        let mut listener = WebsocketTransportListener {
+            stream: unsafe { ::std::mem::uninitialized() },
+            received_values: rv.clone(),
+        };
+
+        println!("Scenario 0: happy path");
+        listener.handle_subscribed(&[json!(12345), json!(23456)]);
+        assert_eq!(1, rv.subscribed.lock().len());
+        assert_eq!(1, rv.len());
+        let query = poll_fn(|| {
+            let val = try_ready!({
+                let res: Result<_, &'static str> = Ok(rv.subscribed.lock().poll_take(|_| true));
+                res
+            });
+            if Id::<SessionScope>::from_raw_value(12345) != val.request {
+                return Err(format!("request ID {:?} did not match", val.request));
+            }
+            if Id::<RouterScope>::from_raw_value(23456) != val.subscription {
+                return Err(format!("subscription ID {:?} did not match", val.subscription));
+            }
+            Ok(Async::Ready(()))
+        });
+        assert_eq!(current_thread::block_on_all(query), Ok(()));
+
+        println!("Scenario 1: 'Request' is not a number");
+        listener.handle_subscribed(&[json!("foobar"), json!(23456)]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 2: 'Subscription' is not a number");
+        listener.handle_subscribed(&[json!(12345), json!("foobar")]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 3: Not enough arguments");
+        listener.handle_subscribed(&[json!(12345)]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 4: Too many arguments");
+        listener.handle_subscribed(&[json!(12345), json!(23456), json!(34567)]);
+        assert_eq!(0, rv.len());
+    }
+
+    #[test]
+    fn handle_message_test() {
+        let rv = ReceivedValues::default();
+        let mut listener = WebsocketTransportListener {
+            stream: unsafe { ::std::mem::uninitialized() },
+            received_values: rv.clone(),
+        };
+
+        println!("Scenario 0: received 'Welcome'");
+        listener.handle_message(r#"[2,12345,{"x":1,"y":true}]"#.to_string());
         assert_eq!(1, rv.welcome.lock().len());
-        let query = future::poll_fn(|| {
+        assert_eq!(1, rv.len());
+        let query = poll_fn(|| {
             let val = try_ready!({
                 let res: Result<_, &'static str> = Ok(rv.welcome.lock().poll_take(|_| true));
                 res
             });
             if Id::<GlobalScope>::from_raw_value(12345) != val.session {
-                return Err("session id did not match")
+                return Err(format!("session id {:?} did not match", val.session))
             }
             if 2 != val.details.len() {
-                return Err("details dict did not match")
+                return Err(format!("details dict {:?} did not match", val.details))
             }
             Ok(Async::Ready(()))
         });
-        assert!(core.run(query).is_ok());
+        assert_eq!(current_thread::block_on_all(query), Ok(()));
+
+        println!("Scenario 1: received 'Abort'");
+        listener.handle_message(r#"[3,{"x":1,"y":true},"org.foo.bar.error"]"#.to_string());
+        assert_eq!(1, rv.abort.lock().len());
+        assert_eq!(1, rv.len());
+        let query = poll_fn(|| {
+            let val = try_ready!({
+                let res: Result<_, &'static str> = Ok(rv.abort.lock().poll_take(|_| true));
+                res
+            });
+            if 2 != val.details.len() {
+                return Err(format!("details dict {:?} did not match", val.details));
+            }
+            if "org.foo.bar.error" != val.reason.0 {
+                return Err(format!("reason URI {:?} did not match", val.reason));
+            }
+            Ok(Async::Ready(()))
+        });
+        assert_eq!(current_thread::block_on_all(query), Ok(()));
+
+        println!("Scenario 2: received 'Goodbye'");
+        listener.handle_message(r#"[6,{"x":1,"y":true},"org.foo.bar.closed"]"#.to_string());
+        assert_eq!(1, rv.goodbye.lock().len());
+        assert_eq!(1, rv.len());
+        let query = poll_fn(|| {
+            let val = try_ready!({
+                let res: Result<_, &'static str> = Ok(rv.goodbye.lock().poll_take(|_| true));
+                res
+            });
+            if 2 != val.details.len() {
+                return Err(format!("details dict {:?} did not match", val.details));
+            }
+            if "org.foo.bar.closed" != val.reason.0 {
+                return Err(format!("reason URI {:?} did not match", val.reason));
+            }
+            Ok(Async::Ready(()))
+        });
+        assert_eq!(current_thread::block_on_all(query), Ok(()));
+
+        println!("Scenario 3: received non-json text");
+        listener.handle_message(r#"~!@#$%^&*()"#.to_string());
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 4: received non-array JSON");
+        listener.handle_message(r#"{"x":1,"y":true}"#.to_string());
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 5: received non-number message code");
+        listener.handle_message(r#"["foobar",12345,23456]"#.to_string());
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 6: received unknown message code");
+        listener.handle_message(r#"[123456,"L"]"#.to_string());
+        assert_eq!(0, rv.len());
     }
 }

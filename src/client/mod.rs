@@ -50,8 +50,15 @@ pub struct Client<T: Transport> {
     #[cfg(feature = "subscriber")]
     subscriptions: Arc<Mutex<HashMap<Subscription, BroadcastHandler>>>,
 }
+impl<T: Transport> std::fmt::Debug for Client<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Client {{\n\treceived: {:?}\n\tsession_id: {:?}\n\ttimeout_duration: {:?}\n\trouter_capabilities: {:?}\n}}",
+            self.received, self.session_id, self.timeout_duration, self.router_capabilities)
+    }
+}
 impl <T: Transport> Client<T> {
-
     /// Begins initialization of a new [`Client`].
     ///
     /// The client will attempt to connect to the WAMP router at the given URL and join the given

@@ -42,18 +42,35 @@ pub enum TxMessage {
         realm: Uri,
         details: Dict,
     },
-    Abort {
-        details: Dict,
-        reason: Uri,
-    },
     Goodbye {
         details: Dict,
         reason: Uri,
+    },
+    Error {
+        // TODO
+    },
+    Publish {
+        // TODO
     },
     Subscribe {
         request: Id<SessionScope>,
         options: Dict,
         topic: Uri,
+    },
+    Unsubscribe {
+        // TODO
+    },
+    Call {
+        // TODO
+    },
+    Register {
+        // TODO
+    },
+    Unregister {
+        // TODO
+    },
+    Yield {
+        // TODO
     },
 }
 
@@ -116,8 +133,61 @@ pub mod rx {
     rx_message_type!(Subscribed [SUBSCRIBED] {
         pub request: Id<SessionScope>,
         pub subscription: Id<RouterScope>,
-    }
-    impl RxMessage for Subscribed {
-        const MSG_CODE: u64 = msg_code::SUBSCRIBED as u64;
-    }
+    });
+
+    // Sent by brokers to subscribers after they are unsubscribed from a topic.
+    #[cfg(feature = "subscriber")]
+    rx_message_type!(Unsubscribed [UNSUBSCRIBED] {
+        pub request: Id<SessionScope>,
+    });
+
+    // Sent by borkers to subscribers to indicate that a message was published to a topic.
+    #[cfg(feature = "subscriber")]
+    rx_message_type!(Event [EVENT] {
+        pub subscription: Id<RouterScope>,
+        pub publication: Id<RouterScope>,
+        pub details: Dict,
+        pub arguments: Option<List>,
+        pub arguments_kw: Option<Dict>,
+    });
+
+    // Sent by brokers to publishers after they publish a message to a topic, if they
+    // requested acknowledgement.
+    #[cfg(feature = "publisher")]
+    rx_message_type!(Published [PUBLISHED] {
+        pub request: Id<SessionScope>,
+        pub publication: Id<RouterScope>,
+    });
+
+    // Sent by dealers to callees after an RPC is registered.
+    #[cfg(feature = "callee")]
+    rx_message_type!(Registered [REGISTERED] {
+        pub request: Id<SessionScope>,
+        pub registration: Id<RouterScope>,
+    });
+
+    // Sent by dealers to callees after an RPC is unregistered.
+    #[cfg(feature = "callee")]
+    rx_message_type!(Unregistered [UNREGISTERED] {
+        pub request: Id<SessionScope>,
+    });
+
+    // Sent by dealers to callees when an RPC they have registered is invoked.
+    #[cfg(feature = "callee")]
+    rx_message_type!(Invocation [INVOCATION] {
+        pub request: Id<SessionScope>,
+        pub registration: Id<RouterScope>,
+        pub details: Dict,
+        pub arguments: Option<List>,
+        pub arguments_kw: Option<Dict>,
+    });
+
+    // Sent by dealers to callers when an RPC they invoked has completed.
+    #[cfg(feature = "caller")]
+    rx_message_type!(Result [RESULT] {
+        pub request: Id<SessionScope>,
+        pub details: Dict,
+        pub arguments: Option<List>,
+        pub arguments_kw: Option<Dict>,
+    });
 }

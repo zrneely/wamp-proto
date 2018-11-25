@@ -370,12 +370,65 @@ pub struct ReceivedValues {
     pub abort: TsPollSet<rx::Abort>,
     /// The buffer of incoming "GOODBYE" messages.
     pub goodbye: TsPollSet<rx::Goodbye>,
-    /// The buffer of incoming "SUBSCRIBED" messages.
-    pub subscribed: TsPollSet<rx::Subscribed>,
+    /// The buffer of incoming "ERROR" messages.
+    pub error: TsPollSet<rx::Error>,
 
-    /// A buffer of received errors. If an error is ever added, it is expected that
-    /// no further messages are ever received.
-    pub errors: Arc<Mutex<Option<Error>>>,
+    /// The buffer of incoming "SUBSCRIBED" messages.
+    #[cfg(feature = "subscriber")]
+    pub subscribed: TsPollSet<rx::Subscribed>,
+    /// The buffer of incoming "UNSUBSCRIBED" messages.
+    #[cfg(feature = "subscriber")]
+    pub unsubscribed: TsPollSet<rx::Unsubscribed>,
+    /// The buffer of incoming "EVENT" messages.
+    #[cfg(feature = "subscriber")]
+    pub event: TsPollSet<rx::Event>,
+
+    /// The buffer of incoming "PUBLISHED" messages.
+    #[cfg(feature = "publisher")]
+    pub published: TsPollSet<rx::Published>,
+
+    /// The buffer of incoming "REGISTERED" messages.
+    #[cfg(feature = "callee")]
+    pub registered: TsPollSet<rx::Registered>,
+    /// The buffer of incoming "UNREGISTERED" messages.
+    #[cfg(feature = "callee")]
+    pub unregistered: TsPollSet<rx::Unregistered>,
+    /// The buffer of incoming "INVOCATION" messages.
+    #[cfg(feature = "callee")]
+    pub invocation: TsPollSet<rx::Invocation>,
+
+    /// The buffer of incoming "RESULT" messages.
+    #[cfg(feature = "caller")]
+    pub result: TsPollSet<rx::Result>,
+}
+impl ReceivedValues {
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        let mut len = self.welcome.lock().len() + self.abort.lock().len() +
+            self.goodbye.lock().len() + self.error.lock().len();
+
+        #[cfg(feature = "subscriber")]
+        {
+            len += self.subscribed.lock().len() + self.unsubscribed.lock().len() + self.event.lock().len();
+        }
+
+        #[cfg(feature = "publisher")]
+        {
+            len += self.published.lock().len();
+        }
+
+        #[cfg(feature = "callee")]
+        {
+            len += self.registered.lock().len() + self.unregistered.lock().len() + self.invocation.lock().len();
+        }
+
+        #[cfg(feature = "caller")]
+        {
+            len += self.result.lock().len();
+        }
+
+        len
+    }
 }
 
 #[cfg(test)]

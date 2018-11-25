@@ -29,12 +29,13 @@ pub(crate) struct InitializeFuture<T: Transport> {
 }
 impl <T> InitializeFuture<T> where T: Transport {
     pub(crate) fn new(
-        sender: T,
+        mut sender: T,
         received: ReceivedValues,
         realm: Uri,
         timeout_duration: Duration,
     ) -> Self {
         let timeout = Delay::new(Instant::now() + timeout_duration);
+        sender.listen();
 
         InitializeFuture {
             state: InitializeFutureState::StartSendHello(Some(TxMessage::Hello {
