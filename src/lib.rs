@@ -22,14 +22,13 @@ extern crate parking_lot;
 extern crate rand;
 extern crate regex;
 extern crate serde;
+#[macro_use]
+extern crate serde_derive;
 extern crate tokio;
 
 #[cfg(feature = "ws_transport")]
 #[macro_use]
 extern crate serde_json;
-#[cfg(feature = "ws_transport")]
-#[macro_use]
-extern crate serde_derive;
 #[cfg(feature = "ws_transport")]
 extern crate websocket;
 
@@ -240,6 +239,7 @@ impl Id<SessionScope> {
 
 /// The types of value which can be sent over WAMP RPC and pub/sub boundaries.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum TransportableValue {
     /// A non-negative integer.
     Integer(u64),

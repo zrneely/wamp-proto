@@ -43,17 +43,22 @@ impl Sink for WebsocketTransport {
     type SinkError = Error;
 
     fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
-        // TODO: avoid clone here, somehow?
-        let value: serde_json::Value = match &item {
-            &TxMessage::Hello { ref realm, details: _ } => json!([
+        let value: serde_json::Value = match item {
+            TxMessage::Hello { ref realm, ref details } => json!([
                 msg_code::HELLO,
                 realm.clone(),
-                {},
+                details,
             ]),
-            &TxMessage::Goodbye { ref details, ref reason } => json!([
+            TxMessage::Goodbye { ref details, ref reason } => json!([
                 msg_code::GOODBYE,
                 details,
                 reason.clone(),
+            ]),
+            TxMessage::Subscribe { ref request, ref options, ref topic } => json!([
+                msg_code::SUBSCRIBE,
+                request,
+                options,
+                topic,
             ]),
             _ => unimplemented!()
         };

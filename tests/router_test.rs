@@ -17,14 +17,13 @@ fn integration_1() {
         "ws://127.0.0.1:9001",
         Uri::strict("org.test").unwrap(),
         Duration::from_secs(10 * 60 * 60)
-    ).unwrap().and_then(|client| {
+    ).unwrap().and_then(|mut client| {
         println!("got client! {:#?}", client);
 
-        // client.subscribe(Uri::strict("org.test.channel").unwrap(), move |broadcast| {
-        //     println!("got broadcast: {:?}, {:?}", broadcast.arguments, broadcast.arguments_kw);
-        //     Box::new(futures::future::ok(()))
-        // }).unwrap()
-        future::ok(true)
+        client.subscribe(Uri::strict("org.test.channel").unwrap(), move |broadcast| {
+            println!("got broadcast: {:?}, {:?}", broadcast.arguments, broadcast.arguments_kw);
+            Box::new(futures::future::ok(()))
+        }).unwrap()
     }).map(|v| {
         println!("subscribed! result: {:?}", v);
         ()

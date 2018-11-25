@@ -18,8 +18,6 @@ mod subscribe;
 #[cfg(feature = "subscriber")]
 pub use self::subscribe::Subscription;
 
-use self::subscribe::BroadcastHandler;
-
 fn check_for_timeout_or_error(
     timeout: &mut Delay,
     received_vals: &mut ReceivedValues
@@ -32,6 +30,10 @@ fn check_for_timeout_or_error(
     // TODO: check for all errors specified by WAMP
 
     Ok(())
+}
+
+struct BroadcastHandler {
+    target: Box<Fn(Broadcast) -> Box<Future<Item = (), Error = Error>> + Send>,
 }
 
 /// A WAMP client.
@@ -137,13 +139,14 @@ impl <T: Transport> Client<T> {
     /// This method returns [`Ok`] if the router supports the "broker" role, and [`Err`] if it
     /// doesn't. The future will return a successful result if subscription was successful, and an
     /// error one if a timeout occurred or some other failure happened.
-    pub fn subscribe<F>(&mut self, topic: Uri, handler: F) -> Result<subscribe::SubscriptionFuture<T>, Error>
-        where
-            F: 'static + FnMut(Broadcast) -> Box<Future<Item = (), Error = Error>> + Send {
+    pub fn subscribe<F>(&mut self, topic: Uri, handler: F) ->
+        Result<impl Future<Item = Subscription, Error = Error>, Error>
+        where F: 'static + (Fn(Broadcast) -> Box<Future<Item = (), Error = Error>>) + Send {
+
         if !self.router_capabilities.broker {
             Err(WampError::RouterSupportMissing.into())
         } else {
-            Ok(subscribe::SubscriptionFuture::new(self, topic, Box::new(handler)))
+            Ok(subscribe::SubscriptionFuture::new(self, topic, BroadcastHandler { target: Box::new(handler) }))
         }
     }
 

@@ -8,7 +8,8 @@ use futures::{Async, AsyncSink, Future};
 use parking_lot::Mutex;
 use tokio::timer::Delay;
 
-use ::{Broadcast, Client, Id, ReceivedValues, RouterScope, SessionScope, Transport, Uri};
+use {Id, ReceivedValues, RouterScope, SessionScope, Transport, Uri};
+use client::{BroadcastHandler, Client};
 use proto::TxMessage;
 
 /// The result of subscribing to a channel. Can be used to unsubscribe.
@@ -20,9 +21,6 @@ pub struct Subscription {
     topic: Uri,
 }
 
-pub(crate) type BroadcastHandler =
-    Box<FnMut(Broadcast) -> Box<Future<Item = (), Error = Error>>>;
-
 #[derive(Debug)]
 enum SubscriptionFutureState {
     StartSendSubscribe(Option<TxMessage>),
@@ -31,7 +29,7 @@ enum SubscriptionFutureState {
 }
 
 /// A future representing a completed subscription.
-pub struct SubscriptionFuture<T: Transport> {
+pub(super) struct SubscriptionFuture<T: Transport> {
     state: SubscriptionFutureState,
 
     topic: Uri,
@@ -45,7 +43,7 @@ pub struct SubscriptionFuture<T: Transport> {
     received: ReceivedValues,
 }
 impl <T: Transport> SubscriptionFuture<T> {
-    pub(crate) fn new(client: &mut Client<T>, topic: Uri, handler: BroadcastHandler) -> Self {
+    pub(super) fn new(client: &mut Client<T>, topic: Uri, handler: BroadcastHandler) -> Self {
         let request_id = Id::<SessionScope>::next();
         SubscriptionFuture {
             state: SubscriptionFutureState::StartSendSubscribe(Some(TxMessage::Subscribe {

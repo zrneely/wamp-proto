@@ -37,6 +37,7 @@ type List = Vec<TransportableValue>;
 /// [the WAMP protocol specification]: http://wamp-proto.org/spec/
 #[derive(Debug)]
 #[allow(missing_docs)]
+// TODO: only enable most variants when they're enabled by cargo features
 pub enum TxMessage {
     Hello {
         realm: Uri,
@@ -79,6 +80,7 @@ pub enum TxMessage {
 ///
 /// [the WAMP protocol specification]: http://wamp-proto.org/spec/
 #[allow(missing_docs)]
+// TODO: convert to enum
 pub mod rx {
     use super::*;
 
