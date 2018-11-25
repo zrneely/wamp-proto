@@ -10,7 +10,6 @@ use futures::{
     stream::{Stream, SplitSink, SplitStream},
 };
 use serde_json::{self, Value};
-use tokio_core::reactor;
 use websocket::{
     ClientBuilder,
     async::{
@@ -72,7 +71,7 @@ impl Sink for WebsocketTransport {
 impl Transport for WebsocketTransport {
     type ConnectFuture = WebsocketTransportConnectFuture;
 
-    fn connect(url: &str, handle: &reactor::Handle) -> Result<ConnectResult<Self>, Error> {
+    fn connect(url: &str) -> Result<ConnectResult<Self>, Error> {
         let client_future = ClientBuilder::new(url)?.async_connect_insecure(handle);
         let received_values = ReceivedValues::default();
 
@@ -85,9 +84,9 @@ impl Transport for WebsocketTransport {
         })
     }
 
-    fn listen(&mut self, handle: &reactor::Handle) {
+    fn listen(&mut self) {
         if let (Some(stream), Some(received_values)) = (self.stream.take(), self.received_values.take()) {
-            handle.spawn(WebsocketTransportListener { stream, received_values });
+            ::tokio::spawn(WebsocketTransportListener { stream, received_values });
         } else {
             warn!("WebsocketTransport::listen called multiple times!");
         }
@@ -327,6 +326,41 @@ impl Future for WebsocketTransportConnectFuture {
 mod tests {
     use super::*;
 
+    use std::io::{self, prelude::*};
+    use std::sync::Arc;
+    use futures::future;
+    use parking_lot::Mutex;
+
+    #[derive(Clone)]
+    struct MockRead {
+        buf: Arc<Mutex<Vec<u8>>>,
+        return_val: Arc<Mutex<Option<io::Error>>>,
+        read_called: Arc<Mutex<bool>>,
+    }
+    impl Read for MockRead {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
+            if let Some(e) = self.return_val.lock().take() {
+                Err(e)
+            } else {
+                let mut lock = self.buf.lock();
+                let len = buf.len();
+                buf.copy_from_slice(&lock.drain(0..len).collect::<Vec<_>>());
+                *self.read_called.lock() = true;
+                Ok(len)
+            }
+        }
+    }
+    impl ::tokio::io::AsyncRead for MockRead {}
+    impl Default for MockRead {
+        fn default() -> Self {
+            MockRead {
+                buf: Arc::new(Mutex::new(vec![])),
+                return_val: Arc::new(Mutex::new(None)),
+                read_called: Arc::new(Mutex::new(false)),
+            }
+        }
+    }
+
     #[test]
     fn json_to_tv_test_integer() {
         assert_eq!(
@@ -355,7 +389,7 @@ mod tests {
 
     #[test]
     fn handle_welcome_test() {
-        let mut core = ::tokio_core::reactor::Core::new().unwrap();
+        let mut rt = ::tokio::runtime::Runtime::new().unwrap();
 
         let rv = ReceivedValues::default();
         let mut listener = WebsocketTransportListener {
@@ -363,15 +397,10 @@ mod tests {
             received_values: rv.clone(),
         };
 
-        // TODO negative test cases
-
         listener.handle_welcome(&[json!(12345), json!({"x": 1, "y": true})]);
         assert_eq!(1, rv.welcome.lock().len());
-        let query = future::poll_fn(|| {
-            let val = try_ready!({
-                let res: Result<_, &'static str> = Ok(rv.welcome.lock().poll_take(|_| true));
-                res
-            });
+        let query = future::poll_fn(|| -> Result<Async<()>, &'static str> {
+            let val = try_ready!(Ok(rv.welcome.lock().poll_take(|_| true)));
             if Id::<GlobalScope>::from_raw_value(12345) != val.session {
                 return Err("session id did not match")
             }
@@ -380,6 +409,16 @@ mod tests {
             }
             Ok(Async::Ready(()))
         });
-        assert!(core.run(query).is_ok());
+        assert!(rt.executor().run(query).is_ok());
+        assert_eq!(0, rv.welcome.lock().len());
+
+        listener.handle_welcome(&[]);
+        assert_eq!(0, rv.welcome.lock().len());
+
+        listener.handle_welcome(&[json!(-12345), json!({})]);
+        assert_eq!(0, rv.welcome.lock().len());
+
+        listener.handle_welcome(&[json!(12345), json!([1, 2, 3])]);
+        assert_eq!(0, rv.welcome.lock().len());
     }
 }

@@ -7,7 +7,6 @@ use failure::Error;
 use futures::{Async, Future};
 use parking_lot::Mutex;
 use tokio::timer::Delay;
-use tokio_core::reactor;
 
 use {ConnectResult, Id, GlobalScope, ReceivedValues, RouterScope, Uri, TransportableValue as TV, Transport};
 use error::WampError;
@@ -70,10 +69,9 @@ impl <T: Transport> Client<T> {
     pub fn new(
         url: &str,
         realm: Uri,
-        handle: &reactor::Handle,
         timeout: Duration
     ) -> Result<impl Future<Item = Self, Error = Error>, Error> {
-        let ConnectResult { future, received_values } = T::connect(url, handle)?;
+        let ConnectResult { future, received_values } = T::connect(url)?;
         Ok(future.and_then(move |transport| {
             initialize::InitializeFuture::new(transport, received_values, realm, timeout)
         }))

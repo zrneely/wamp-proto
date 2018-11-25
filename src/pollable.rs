@@ -1,7 +1,7 @@
 
-use std::hash::{Hash, Hasher};
-use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicUsize, Ordering};
+// use std::hash::{Hash, Hasher};
+// use std::ops::{Deref, DerefMut};
+// use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::Async;
 use futures::task::{self, Task};
@@ -55,10 +55,7 @@ pub struct PollableSet<T> {
 }
 impl<T> Default for PollableSet<T> {
     fn default() -> Self {
-        PollableSet {
-            items: Vec::new(),
-            tasks: Vec::new(),
-        }
+        PollableSet::new()
     }
 }
 impl <T> PollableSet<T> {
@@ -108,5 +105,75 @@ impl <T> PollableSet<T> {
         for task in self.tasks.drain(..) {
             task.notify();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::Arc;
+    use futures::future::{self, Executor};
+    use parking_lot::Mutex;
+
+    #[test]
+    fn pollable_set_test() {
+        let mut core = ::tokio_core::reactor::Core::new().unwrap();
+        let mut set = PollableSet::<u32>::new();
+        assert_eq!(0, set.items.len());
+        assert_eq!(0, set.len());
+
+        set.insert(6);
+        assert_eq!(1, set.items.len());
+        assert_eq!(1, set.len());
+
+        set.insert(4);
+        set.insert(8);
+        assert_eq!(3, set.items.len());
+        assert_eq!(3, set.len());
+
+        let mut odd_query_got_pending = Arc::new(Mutex::new(false));
+        let mut odd_poll_count = Arc::new(Mutex::new(0));
+        let mut even_query_got_pending = Arc::new(Mutex::new(false));
+        let mut even_poll_count = Arc::new(Mutex::new(0));
+
+        let odd_query = future::poll_fn(|| -> Result<Async<()>, ()> {
+            *odd_poll_count.lock() += 1;
+            match set.poll_take(|x| x % 2 == 1) {
+                Async::Ready(x) => Ok(Async::Ready(())),
+                Async::NotReady => {
+                    *odd_query_got_pending.lock() = true;
+                    Ok(Async::NotReady)
+                }
+            }
+        });
+        let even_query = future::poll_fn(|| -> Result<Async<()>, ()> {
+            *even_poll_count.lock() += 1;
+            match set.poll_take(|x| x % 2 == 0) {
+                Async::Ready(x) => Ok(Async::Ready(())),
+                Async::NotReady => {
+                    *even_query_got_pending.lock() = true;
+                    Ok(Async::NotReady)
+                }
+            }
+        });
+
+        // Spawn both queries in the background
+        core.execute(odd_query).unwrap();
+        core.execute(even_query).unwrap();
+
+        set.insert(10);
+        set.insert(5);
+
+        // Wait for all the queries to complete
+        core.join(); // TODO ???
+
+        assert_eq!(true, *odd_query_got_pending.lock());
+        assert_eq!(false, *even_query_got_pending.lock());
+        assert_eq!(3, *odd_poll_count.lock()); // once originally, once for the 10, once for the 5
+        assert_eq!(1, *even_poll_count.lock());
+        // 3 (before the queries are created), 10 and 5 are inserted, and each query consumes one value.
+        assert_eq!(3, set.items.len());
+        assert_eq!(3, set.len());
     }
 }

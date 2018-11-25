@@ -12,7 +12,6 @@
 extern crate failure;
 #[macro_use]
 extern crate failure_derive;
-#[macro_use]
 extern crate futures;
 #[macro_use]
 extern crate lazy_static;
@@ -23,7 +22,6 @@ extern crate rand;
 extern crate regex;
 extern crate serde;
 extern crate tokio;
-extern crate tokio_core;
 
 #[cfg(feature = "ws_transport")]
 #[macro_use]
@@ -47,7 +45,6 @@ use futures::prelude::*;
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
 use regex::Regex;
-use tokio_core::reactor;
 
 #[cfg(feature = "ws_transport")]
 use serde::{
@@ -307,7 +304,8 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     /// The type of future returned when this transport opens a connection.
     type ConnectFuture: Future<Item = Self, Error = Error>;
 
-    /// Asynchronously constructs a transport to the router at the given location.
+    /// Asynchronously constructs a transport to the router at the given location. This method
+    /// must be called under a Tokio runtime.
     ///
     /// The format of the location string is implementation defined, but will probably be a URL.
     /// This method should do asynchronous work such as opening a TCP socket or initializing a
@@ -322,11 +320,11 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     ///
     /// This method should never panic. It should handle failures by returning [`Err`] from the
     /// appropriate future, or an Err() result for synchronous errors.
-    fn connect(url: &str, handle: &reactor::Handle) -> Result<ConnectResult<Self>, Error>;
+    fn connect(url: &str) -> Result<ConnectResult<Self>, Error>;
 
     /// Spawns a long-running task which will listen for events and forward them to the
     /// [`ReceivedValues`] returned by the [`connect`] method. Multiple calls to this method
-    /// have no effect beyond the first.
+    /// have no effect beyond the first. This method must be called under a Tokio reactor.
     ///
     /// # Remarks
     ///
@@ -339,7 +337,7 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     /// # Panics
     ///
     /// This method should never panic.
-    fn listen(&mut self, handle: &reactor::Handle);
+    fn listen(&mut self);
 }
 
 /// The result of connecting to a channel.
