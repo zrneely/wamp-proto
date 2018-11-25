@@ -26,6 +26,10 @@ pub enum WampError {
     #[fail(display = "router does not support required role")]
     RouterSupportMissing,
 
+    /// The client is in an invalid state.
+    #[fail(display = "the client is in an invalid state")]
+    InvalidClientState,
+
     #[fail(display = "router responded with error \"{}\"", error)]
     ErrorReceived {
         error: Uri,

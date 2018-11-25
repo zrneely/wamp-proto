@@ -8,8 +8,8 @@ use futures::{Async, AsyncSink, Future};
 use parking_lot::Mutex;
 use tokio::timer::Delay;
 
-use {Client, ReceivedValues, Transport, TransportableValue as TV, Uri};
-use client::RouterCapabilities;
+use {ReceivedValues, Transport, TransportableValue as TV, Uri};
+use client::{Client, ClientState, RouterCapabilities};
 use proto::TxMessage;
 
 enum InitializeFutureState {
@@ -122,6 +122,9 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
                                 session_id: msg.session,
                                 timeout_duration: self.timeout_duration,
                                 router_capabilities: RouterCapabilities::from_details(&msg.details),
+
+                                // We've already sent our "hello" and received our "welcome".
+                                state: ClientState::Established,
 
                                 subscriptions: Arc::new(Mutex::new(HashMap::new())),
                             }))

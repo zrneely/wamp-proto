@@ -36,6 +36,43 @@ struct BroadcastHandler {
     target: Box<Fn(Broadcast) -> Box<Future<Item = (), Error = Error>> + Send>,
 }
 
+// The states a client can be in, according to the WAMP specification.
+// Clients are not made available to consumers of this library until they reach
+// their initial "Established" state.
+#[derive(Debug, Eq, PartialEq)]
+enum ClientState {
+    // The connection to the service is closed.
+    Closed,
+    // The client has sent the initial "HELLO" message, but not received a response.
+    Establishing,
+    // The client received anything other than a "WELCOME" while waiting for a "WELCOME",
+    // or received "HELLO" or "AUTHENTICATE" while "Established".
+    Failed,
+    // The client is authenticating the router or the router is authenticating the client.
+    Authenticating,
+    // The connection is established and PUB/SUB and/or RPC messages can be exchanged with
+    // the router freely.
+    Established,
+    // The client initiated a clean connection termination, and the router has not yet responded.
+    ShuttingDown,
+    // The router initiated a clean connection termination, and the client has not yet responded.
+    Closing,
+}
+
+/// Configuration options for a new client.
+pub struct ClientConfig<'a> {
+    /// The URL to connect to.
+    pub url: &'a str,
+    /// The realm to connect to.
+    pub realm: Uri,
+    /// The timeout for basic requests to the router (subscribing, publishing, etc). This
+    /// does not effect shutdown or RPC invocations, each of which have their own timeouts.
+    pub timeout: Duration,
+    /// The maximum time to wait for a "GOODBYE" message from the router in response to
+    /// a client-initiated disconnection.
+    pub shutdown_timeout: Duration,
+}
+
 /// A WAMP client.
 ///
 /// By default, this supports all 4 roles supported by this crate. They can be
@@ -49,6 +86,8 @@ pub struct Client<T: Transport> {
     timeout_duration: Duration,
     router_capabilities: RouterCapabilities,
 
+    state: ClientState,
+
     #[cfg(feature = "subscriber")]
     subscriptions: Arc<Mutex<HashMap<Subscription, BroadcastHandler>>>,
 }
@@ -61,23 +100,23 @@ impl<T: Transport> std::fmt::Debug for Client<T> {
     }
 }
 impl <T: Transport> Client<T> {
-    /// Begins initialization of a new [`Client`].
+    /// Begins initialization of a new [`Client`]. See [`ClientConfig`] for details.
     ///
     /// The client will attempt to connect to the WAMP router at the given URL and join the given
-    /// realm; the future will not resolve until both of those tasks succeed.
+    /// realm; the future will not resolve until both of those tasks succeed and the connection
+    /// is established.
     ///
     /// This method will handle initialization of the [`Transport`] used, but the caller must
     /// specify the type of transport.
-    ///
-    /// The given [`Duration`] will be used as a timeout for protocol-level communications. In
-    /// particular, it will *not* be used as a timeout for remote procedure calls. RPC timeouts
-    /// can be specified in the [`Client::call`] method, if the `caller` Cargo feature is enabled
-    /// (on by default).
-    pub fn new(url: &str, realm: Uri, timeout: Duration) -> Result<impl Future<Item = Self, Error = Error>, Error> {
-        let ConnectResult { future, received_values } = T::connect(url)?;
-        Ok(future.and_then(move |transport| {
+    pub fn new<'a>(config: ClientConfig<'a>) -> impl Future<Item = Self, Error = Error> {
+        let ClientConfig { url, realm, timeout, shutdown_timeout } = config;
+        let ConnectResult { future, received_values } = T::connect(url);
+
+        // TODO: consume the shutdown_timeout
+
+        future.and_then(move |transport| {
             initialize::InitializeFuture::new(transport, received_values, realm, timeout)
-        }))
+        })
     }
 
     //#[cfg(feature = "caller")]
@@ -124,7 +163,6 @@ impl <T: Transport> Client<T> {
     //    unimplemented!()
     //}
 
-    #[cfg(feature = "subscriber")]
     /// Subscribes to a channel.
     ///
     /// The provided broadcast handler must not block! Any potentially blocking operations it must
@@ -139,14 +177,21 @@ impl <T: Transport> Client<T> {
     /// This method returns [`Ok`] if the router supports the "broker" role, and [`Err`] if it
     /// doesn't. The future will return a successful result if subscription was successful, and an
     /// error one if a timeout occurred or some other failure happened.
+    #[cfg(feature = "subscriber")]
     pub fn subscribe<F>(&mut self, topic: Uri, handler: F) ->
         Result<impl Future<Item = Subscription, Error = Error>, Error>
         where F: 'static + (Fn(Broadcast) -> Box<Future<Item = (), Error = Error>>) + Send {
 
-        if !self.router_capabilities.broker {
+        if self.state != ClientState::Established {
+            Err(WampError::InvalidClientState.into())
+        } else if !self.router_capabilities.broker {
             Err(WampError::RouterSupportMissing.into())
         } else {
-            Ok(subscribe::SubscriptionFuture::new(self, topic, BroadcastHandler { target: Box::new(handler) }))
+            Ok(subscribe::SubscriptionFuture::new(
+                self,
+                topic,
+                BroadcastHandler { target: Box::new(handler) }
+            ))
         }
     }
 
@@ -158,7 +203,13 @@ impl <T: Transport> Client<T> {
 
     /// Closes the connection to the server.
     fn close(&mut self) {
+        self.state = ClientState::ShuttingDown;
         unimplemented!()
+    }
+}
+impl<T: Transport> Drop for Client<T> {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
@@ -188,18 +239,18 @@ impl RouterCapabilities {
 /// Arguments to an RPC call.
 pub struct RpcArgs {
     /// The positional arguments. If there are none, the `Vec` will be empty.
-    pub list: Vec<TV>,
+    pub arguments: Vec<TV>,
     /// The keyword arguments. If there are none, the `HashMap` will be empty.
-    pub dict: HashMap<String, TV>,
+    pub arguments_kw: HashMap<String, TV>,
 }
 
 #[cfg(any(feature = "caller", feature = "callee"))]
 /// Return value from an RPC call.
 pub struct RpcReturn {
     /// Positional return values. If there are none, set this to an empty `Vec`.
-    pub list: Vec<TV>,
+    pub arguments: Vec<TV>,
     /// Keyword return values. If there are none, set this to an empty `HashMap`.
-    pub dict: HashMap<String, TV>,
+    pub arguments_kw: HashMap<String, TV>,
 }
 
 #[cfg(feature = "callee")]

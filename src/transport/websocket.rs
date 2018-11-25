@@ -5,17 +5,18 @@ use failure::Error;
 use futures::{
     Async,
     AsyncSink,
-    Future,
+    future::{self, Future},
     sink::Sink,
     stream::{Stream, SplitSink, SplitStream},
 };
+use http::HeaderMap;
 use serde_json::{self, Value};
 use tokio::reactor;
 use websocket::{
     ClientBuilder,
     async::{
         TcpStream,
-        client::{Client, ClientNew},
+        client::Client,
     },
     message::{Message, OwnedMessage},
 };
@@ -58,17 +59,23 @@ impl Sink for WebsocketTransport {
 impl Transport for WebsocketTransport {
     type ConnectFuture = WebsocketTransportConnectFuture;
 
-    fn connect(url: &str) -> Result<ConnectResult<Self>, Error> {
-        let client_future = ClientBuilder::new(url)?.async_connect_insecure(&reactor::Handle::current());
+    fn connect(url: &str) -> ConnectResult<Self> {
         let received_values = ReceivedValues::default();
 
-        Ok(ConnectResult {
+        let future: Box<Future<Item = _, Error = Error> + Send> = match ClientBuilder::new(url) {
+            Ok(builder) => Box::new(builder
+                .async_connect_insecure(&reactor::Handle::current())
+                .map_err(|e| e.into())),
+            Err(e) => Box::new(future::err(e.into())),
+        };
+
+        ConnectResult {
             future: WebsocketTransportConnectFuture {
-                future: client_future,
+                future,
                 received_values: Some(received_values.clone()),
             },
             received_values,
-        })
+        }
     }
 
     fn listen(&mut self) {
@@ -292,7 +299,7 @@ fn json_to_tv(value: &Value) -> Option<TransportableValue> {
 
 /// Returned by [`WebsocketTransport::Connect`]; resolves to a [`WebsocketTransport`].
 pub struct WebsocketTransportConnectFuture {
-    future: ClientNew<TcpStream>,
+    future: Box<Future<Item = (Client<TcpStream>, HeaderMap), Error = Error> + Send>,
     received_values: Option<ReceivedValues>,
 }
 impl Future for WebsocketTransportConnectFuture {

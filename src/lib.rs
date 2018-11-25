@@ -14,6 +14,7 @@ extern crate failure;
 extern crate failure_derive;
 #[macro_use]
 extern crate futures;
+extern crate http;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
@@ -312,7 +313,7 @@ impl TransportableValue {
 /// *not* look for or even be aware of out-of-order messages.
 pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     /// The type of future returned when this transport opens a connection.
-    type ConnectFuture: Future<Item = Self, Error = Error>;
+    type ConnectFuture: Future<Item = Self, Error = Error> + Send;
 
     /// Asynchronously constructs a transport to the router at the given location. This method
     /// must be called under a Tokio runtime.
@@ -330,7 +331,7 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     ///
     /// This method may panic if not called under a tokio runtime. It should handle failures by returning
     /// [`Err`] from the appropriate future, or an Err() result for synchronous errors.
-    fn connect(url: &str) -> Result<ConnectResult<Self>, Error>;
+    fn connect(url: &str) -> ConnectResult<Self>;
 
     /// Spawns a long-running task which will listen for events and forward them to the
     /// [`ReceivedValues`] returned by the [`connect`] method. Multiple calls to this method

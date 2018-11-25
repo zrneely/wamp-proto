@@ -36,7 +36,6 @@ type List = Vec<TransportableValue>;
 ///
 /// [the WAMP protocol specification]: http://wamp-proto.org/spec/
 #[derive(Debug)]
-// TODO: only enable most variants when they're enabled by cargo features
 pub enum TxMessage {
 
     /// Session management; used by all types of peers.
