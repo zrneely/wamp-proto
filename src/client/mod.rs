@@ -137,11 +137,9 @@ impl <T: Transport> Client<T> {
     /// This method returns [`Ok`] if the router supports the "broker" role, and [`Err`] if it
     /// doesn't. The future will return a successful result if subscription was successful, and an
     /// error one if a timeout occurred or some other failure happened.
-    pub fn subscribe<F: 'static + FnMut(Broadcast) -> Box<Future<Item = (), Error = Error>>>(
-        &mut self,
-        topic: Uri,
-        handler: F
-    ) -> Result<subscribe::SubscriptionFuture<T>, Error> {
+    pub fn subscribe<F>(&mut self, topic: Uri, handler: F) -> Result<subscribe::SubscriptionFuture<T>, Error>
+        where
+            F: 'static + FnMut(Broadcast) -> Box<Future<Item = (), Error = Error>> + Send {
         if !self.router_capabilities.broker {
             Err(WampError::RouterSupportMissing.into())
         } else {
@@ -213,7 +211,7 @@ pub struct Registration {
 /// A message broadcast on a channel.
 pub struct Broadcast {
     /// Positional values. If there are none, this should be an empty `Vec`.
-    pub list: Vec<TV>,
+    pub arguments: Vec<TV>,
     /// Keyword values. If there are none, this should be an empty `HashMap`.
-    pub dict: HashMap<String, TV>,
+    pub arguments_kw: HashMap<String, TV>,
 }

@@ -23,6 +23,7 @@ pub struct Subscription {
 pub(crate) type BroadcastHandler =
     Box<FnMut(Broadcast) -> Box<Future<Item = (), Error = Error>>>;
 
+#[derive(Debug)]
 enum SubscriptionFutureState {
     StartSendSubscribe(Option<TxMessage>),
     SendSubscribe,
