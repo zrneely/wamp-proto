@@ -18,8 +18,8 @@ pub enum WampError {
         expecting: &'static str,
     },
 
-    /// The transport's incoming message stream unexpectedly closed.
-    #[fail(display = "transport unexpectedly closed")]
+    /// The transport was closed.
+    #[fail(display = "transport closed")]
     TransportStreamClosed,
 
     /// The router does not support a required role.

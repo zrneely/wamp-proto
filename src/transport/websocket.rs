@@ -1,5 +1,6 @@
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use failure::Error;
 use futures::{
@@ -8,8 +9,10 @@ use futures::{
     future::{self, Future},
     sink::Sink,
     stream::{Stream, SplitSink, SplitStream},
+    sync::oneshot,
 };
 use http::HeaderMap;
+use parking_lot::Mutex;
 use serde_json::{self, Value};
 use tokio::reactor;
 use websocket::{
@@ -33,9 +36,13 @@ use {
 /// An implementation of a websocket-based WAMP Transport.
 pub struct WebsocketTransport {
     client: SplitSink<Client<TcpStream>>,
+    stream: Arc<Mutex<Option<SplitStream<Client<TcpStream>>>>>,
+
+    // Used to tell the WebsocketTransportListener to finish. If
+    // it's None, then listen() hasn't been called yet.
+    listener_stop_sender: Option<oneshot::Sender<()>>,
 
     // Only present until listen() has been called once
-    stream: Option<SplitStream<Client<TcpStream>>>,
     received_values: Option<ReceivedValues>,
 }
 impl Sink for WebsocketTransport {
@@ -79,17 +86,37 @@ impl Transport for WebsocketTransport {
     }
 
     fn listen(&mut self) {
-        if let (Some(stream), Some(received_values)) = (self.stream.take(), self.received_values.take()) {
-            tokio::spawn(WebsocketTransportListener { stream, received_values });
+        if let (stream, Some(received_values)) = (self.stream.clone(), self.received_values.take()) {
+            let (sender, stop_receiver) = oneshot::channel();
+            self.listener_stop_sender = Some(sender);
+            tokio::spawn(WebsocketTransportListener { stream, received_values, stop_receiver });
         } else {
             warn!("WebsocketTransport::listen called multiple times!");
         }
     }
+
+    fn close(&mut self) {
+        // Dropping the stream will close the listener; we also spawn a new task to close the client.
+        self.stream.lock().take();
+        debug!("dropped stream");
+
+        // If the listener is started, stop it.
+        if let Some(sender) = self.listener_stop_sender.take() {
+            let _ = sender.send(());
+        }
+    }
+}
+impl Drop for WebsocketTransport {
+    fn drop(&mut self) {
+        debug!("dropping WebsocketTransport");
+        Transport::close(self);
+    }
 }
 
 struct WebsocketTransportListener {
-    stream: SplitStream<Client<TcpStream>>,
+    stream: Arc<Mutex<Option<SplitStream<Client<TcpStream>>>>>,
     received_values: ReceivedValues,
+    stop_receiver: oneshot::Receiver<()>,
 }
 impl Future for WebsocketTransportListener {
     type Item = ();
@@ -105,7 +132,28 @@ impl Future for WebsocketTransportListener {
 impl WebsocketTransportListener {
     fn poll_impl(&mut self) -> Result<Async<()>, Error> {
         loop {
-            match self.stream.poll()? {
+            // First, check to see if we've been told to stop
+            match self.stop_receiver.poll() {
+                // we haven't been told to stop
+                Ok(Async::NotReady) => {},
+                // either we have been told to stop, or the sender was dropped, in which case
+                // we should also stop
+                Ok(Async::Ready(_)) | Err(_) => {
+                    debug!("WebsocketTransportListener told to stop!");
+                    return Ok(Async::Ready(()))
+                }
+            }
+
+            let poll_result = {
+                if let Some(ref mut stream) = *self.stream.lock() {
+                    stream.poll()?
+                } else {
+                    warn!("WebsocketTransportListener source stream closed!");
+                    return Ok(Async::Ready(()));
+                }
+            };
+
+            match poll_result {
                 // Happy path
                 Async::Ready(Some(OwnedMessage::Text(message))) => self.handle_message(message),
 
@@ -315,11 +363,12 @@ impl Future for WebsocketTransportConnectFuture {
 
                 return Ok(Async::Ready(WebsocketTransport {
                     client,
-                    stream: Some(stream),
+                    stream: Arc::new(Mutex::new(Some(stream))),
                     received_values: Some(self.received_values
                         .take()
                         .expect("invalid WebsocketTransportConnectFuture state")
                     ),
+                    listener_stop_sender: None,
                 }))
             }
         }
@@ -393,9 +442,11 @@ mod tests {
     #[test]
     fn handle_welcome_test() {
         let rv = ReceivedValues::default();
+        let (_sender, stop_receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
             stream: unsafe { ::std::mem::uninitialized() },
             received_values: rv.clone(),
+            stop_receiver,
         };
 
         println!("Scenario 0: happy path");
@@ -437,9 +488,11 @@ mod tests {
     #[test]
     fn handle_abort_test() {
         let rv = ReceivedValues::default();
+        let (_sender, stop_receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
             stream: unsafe { ::std::mem::uninitialized() },
             received_values: rv.clone(),
+            stop_receiver,
         };
 
         println!("Scenario 0: happy path");
@@ -485,9 +538,11 @@ mod tests {
     #[test]
     fn handle_goodbye_test() {
         let rv = ReceivedValues::default();
+        let (_sender, stop_receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
             stream: unsafe { ::std::mem::uninitialized() },
             received_values: rv.clone(),
+            stop_receiver,
         };
 
         println!("Scenario 0: happy path");
@@ -534,9 +589,11 @@ mod tests {
     #[test]
     fn handle_subscribed_test() {
         let rv = ReceivedValues::default();
+        let (_sender, receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
             stream: unsafe { ::std::mem::uninitialized() },
             received_values: rv.clone(),
+            stop_receiver: receiver,
         };
 
         println!("Scenario 0: happy path");
@@ -578,9 +635,11 @@ mod tests {
     #[test]
     fn handle_message_test() {
         let rv = ReceivedValues::default();
+        let (_sender, stop_receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
             stream: unsafe { ::std::mem::uninitialized() },
             received_values: rv.clone(),
+            stop_receiver,
         };
 
         println!("Scenario 0: received 'Welcome'");

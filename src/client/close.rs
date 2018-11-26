@@ -5,11 +5,11 @@ use std::time::Instant;
 
 use failure::Error;
 use futures::{Async, AsyncSink, Future};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
 use {ReceivedValues, Transport, Uri};
-use client::Client;
+use client::{Client, ClientState};
 use proto::TxMessage;
 
 #[derive(Debug)]
@@ -26,6 +26,7 @@ pub(super) struct CloseFuture<T: Transport> {
 
     sender: Arc<Mutex<T>>,
     received: ReceivedValues,
+    client_state: Arc<RwLock<ClientState>>,
 }
 impl<T> CloseFuture<T> where T: Transport {
     pub fn new(client: &mut Client<T>, reason: Uri) -> Self {
@@ -39,6 +40,7 @@ impl<T> CloseFuture<T> where T: Transport {
 
             sender: client.sender.clone(),
             received: client.received.clone(),
+            client_state: client.state.clone(),
         }
     }
 }
@@ -86,6 +88,7 @@ impl<T> Future for CloseFuture<T> where T: Transport {
                         }
                         Async::Ready(msg) => {
                             info!("WAMP session closed: response {:?} ({:?})", msg.details, msg.reason);
+                            *self.client_state.write() = ClientState::Closed;
                             return Ok(Async::Ready(()))
                         }
                     }

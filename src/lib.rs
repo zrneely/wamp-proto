@@ -288,6 +288,12 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
     ///
     /// This method will panic if not called under a tokio runtime.
     fn listen(&mut self);
+
+    /// Closes whatever connection this has open and stops listening for incoming messages.
+    /// Calling this before `listen` is undefined behavior.
+    ///
+    /// This method is allowed to do blocking work.
+    fn close(&mut self);
 }
 
 /// The result of connecting to a channel.

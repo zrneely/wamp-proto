@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use failure::Error;
 use futures::{Async, AsyncSink, Future};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
 use {ReceivedValues, Transport, TransportableValue as TV, Uri};
@@ -125,7 +125,7 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
                                 router_capabilities: RouterCapabilities::from_details(&msg.details),
 
                                 // We've already sent our "hello" and received our "welcome".
-                                state: ClientState::Established,
+                                state: Arc::new(RwLock::new(ClientState::Established)),
 
                                 subscriptions: Arc::new(Mutex::new(HashMap::new())),
                             }))

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use failure::Error;
 use futures::{Async, future::{self, Either, Future}};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
 use {
@@ -92,7 +92,7 @@ pub struct Client<T: Transport> {
     shutdown_timeout_duration: Duration,
     router_capabilities: RouterCapabilities,
 
-    state: ClientState,
+    state: Arc<RwLock<ClientState>>,
 
     #[cfg(feature = "subscriber")]
     subscriptions: Arc<Mutex<HashMap<Subscription, BroadcastHandler>>>,
@@ -186,7 +186,7 @@ impl <T: Transport> Client<T> {
         Result<impl Future<Item = Subscription, Error = Error>, Error>
         where F: 'static + (Fn(Broadcast) -> Box<Future<Item = (), Error = Error>>) + Send {
 
-        if self.state != ClientState::Established {
+        if *self.state.read() != ClientState::Established {
             Err(WampError::InvalidClientState.into())
         } else if !self.router_capabilities.broker {
             Err(WampError::RouterSupportMissing.into())
@@ -209,18 +209,20 @@ impl <T: Transport> Client<T> {
     /// the connected router actively acknowledges our disconnect within the shutdown_timeout,
     /// and resolves with an error otherwise. After this is called, all incoming messages except
     /// acknowledgement of our disconnection is ignored.
-    fn close(&mut self, reason: Uri) -> impl Future<Item = (), Error = Error> {
-        if self.state != ClientState::Established {
+    pub fn close(&mut self, reason: Uri) -> impl Future<Item = (), Error = Error> {
+        if *self.state.read() != ClientState::Established {
             Either::A(future::err(WampError::InvalidClientState.into()))
         } else {
-            self.state = ClientState::ShuttingDown;
+            *self.state.write() = ClientState::ShuttingDown;
             Either::B(close::CloseFuture::new(self, reason))
         }
     }
 }
 impl<T: Transport> Drop for Client<T> {
     fn drop(&mut self) {
-        self.close(Uri::raw(known_uri::session_close::system_shutdown.to_string()));
+        if *self.state.read() != ClientState::Closed {
+            error!("Client was not closed before being dropped!");
+        }
     }
 }
 
