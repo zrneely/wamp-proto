@@ -76,6 +76,24 @@ pub struct ClientConfig<'a> {
     /// The maximum time to wait for a "GOODBYE" message from the router in response to
     /// a client-initiated disconnection.
     pub shutdown_timeout: Duration,
+    /// If true, the client will panic when dropped if it's still open.
+    pub panic_on_drop_while_open: bool,
+}
+impl<'a> ClientConfig<'a> {
+    /// Creates a new ClientConfig with some default values. They can be overridden after creation if
+    /// desired. The defaults are:
+    ///
+    /// * `timeout`: 10 seconds
+    /// * `shutdown_timeout`: 1 second
+    /// * `panic_on_drop_while_open`: true
+    pub fn new(url: &'a str, realm: Uri) -> Self {
+        ClientConfig {
+            url, realm,
+            timeout: Duration::from_secs(10),
+            shutdown_timeout: Duration::from_secs(1),
+            panic_on_drop_while_open: true,
+        }
+    }
 }
 
 /// A WAMP client.
@@ -96,6 +114,8 @@ pub struct Client<T: Transport> {
 
     #[cfg(feature = "subscriber")]
     subscriptions: Arc<Mutex<HashMap<Subscription, BroadcastHandler>>>,
+
+    panic_on_drop_while_open: bool,
 }
 impl<T: Transport> std::fmt::Debug for Client<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -115,11 +135,22 @@ impl <T: Transport> Client<T> {
     /// This method will handle initialization of the [`Transport`] used, but the caller must
     /// specify the type of transport.
     pub fn new<'a>(config: ClientConfig<'a>) -> impl Future<Item = Self, Error = Error> {
-        let ClientConfig { url, realm, timeout, shutdown_timeout } = config;
+        let ClientConfig {
+            url, realm,
+            timeout, shutdown_timeout,
+            panic_on_drop_while_open
+        } = config;
         let ConnectResult { future, received_values } = T::connect(url);
 
         future.and_then(move |transport| {
-            initialize::InitializeFuture::new(transport, received_values, realm, timeout, shutdown_timeout)
+            initialize::InitializeFuture::new(
+                transport,
+                received_values,
+                realm,
+                timeout,
+                shutdown_timeout,
+                panic_on_drop_while_open,
+            )
         })
     }
 
@@ -222,6 +253,10 @@ impl<T: Transport> Drop for Client<T> {
     fn drop(&mut self) {
         if *self.state.read() != ClientState::Closed {
             error!("Client was not closed before being dropped!");
+
+            if self.panic_on_drop_while_open {
+                panic!("Client was not closed before being dropped!");
+            }
         }
     }
 }

@@ -21,10 +21,12 @@ enum InitializeFutureState {
 
 pub(super) struct InitializeFuture<T: Transport> {
     state: InitializeFutureState,
-
     timeout: Delay,
+
+    // client properties
     timeout_duration: Duration,
     shutdown_timeout_duration: Duration,
+    panic_on_drop_while_open: bool,
 
     sender: Arc<Mutex<T>>,
     received: ReceivedValues,
@@ -36,6 +38,7 @@ impl <T> InitializeFuture<T> where T: Transport {
         realm: Uri,
         timeout_duration: Duration,
         shutdown_timeout_duration: Duration,
+        panic_on_drop_while_open: bool,
     ) -> Self {
         let timeout = Delay::new(Instant::now() + timeout_duration);
         sender.listen();
@@ -65,7 +68,7 @@ impl <T> InitializeFuture<T> where T: Transport {
                 },
             })),
 
-            timeout, timeout_duration, shutdown_timeout_duration,
+            timeout, timeout_duration, shutdown_timeout_duration, panic_on_drop_while_open,
 
             sender: Arc::new(Mutex::new(sender)),
             received,
@@ -122,6 +125,7 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
                                 session_id: msg.session,
                                 timeout_duration: self.timeout_duration,
                                 shutdown_timeout_duration: self.shutdown_timeout_duration,
+                                panic_on_drop_while_open: self.panic_on_drop_while_open,
                                 router_capabilities: RouterCapabilities::from_details(&msg.details),
 
                                 // We've already sent our "hello" and received our "welcome".

@@ -20,12 +20,13 @@ lazy_static! {
 fn integration_1() {
     env_logger::init();
 
-    let client_config = ClientConfig {
-        url: "ws://127.0.0.1:9001",
-        realm: Uri::strict("org.test").unwrap(),
-        timeout: Duration::from_secs(60 * 10),
-        shutdown_timeout: Duration::from_secs(60 * 10),
-    };
+    let mut client_config = ClientConfig::new(
+        "ws://127.0.0.1:9001",
+        Uri::strict("org.test").unwrap()
+    );
+    client_config.timeout = Duration::from_secs(60 * 10);
+    client_config.shutdown_timeout = Duration::from_secs(60 * 10);
+    client_config.panic_on_drop_while_open = false;
 
     let future = Client::<WebsocketTransport>::new(client_config)
         .and_then(|mut client| {
