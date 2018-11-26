@@ -98,17 +98,18 @@ impl Transport for WebsocketTransport {
     fn close(&mut self) {
         // Dropping the stream will close the listener; we also spawn a new task to close the client.
         self.stream.lock().take();
-        debug!("dropped stream");
+        debug!("WebsocketTransport dropped stream");
 
         // If the listener is started, stop it.
         if let Some(sender) = self.listener_stop_sender.take() {
             let _ = sender.send(());
+            debug!("WebsocketTransport sent stop signal to WebsocketTransportListener");
         }
     }
 }
 impl Drop for WebsocketTransport {
     fn drop(&mut self) {
-        debug!("dropping WebsocketTransport");
+        debug!("Closing WebsocketTransport");
         Transport::close(self);
     }
 }
@@ -124,7 +125,7 @@ impl Future for WebsocketTransportListener {
 
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         self.poll_impl().map_err(|e| {
-            error!("{:?}", e);
+            error!("WebsocketTransportListener poll error: {:?}", e);
             ()
         })
     }
@@ -132,7 +133,6 @@ impl Future for WebsocketTransportListener {
 impl WebsocketTransportListener {
     fn poll_impl(&mut self) -> Result<Async<()>, Error> {
         loop {
-            // First, check to see if we've been told to stop
             match self.stop_receiver.poll() {
                 // we haven't been told to stop
                 Ok(Async::NotReady) => {},
@@ -159,12 +159,12 @@ impl WebsocketTransportListener {
 
                 // Received some non-text message: log and move on
                 Async::Ready(Some(message)) => {
-                    warn!("received unknown message {:?}", message);
+                    warn!("Received non-text message {:?}", message);
                 }
 
                 // Received no message: stream is closed
                 Async::Ready(None) => {
-                    info!("Websocket underlying stream closed!");
+                    warn!("Websocket underlying stream closed!");
                     return Ok(Async::Ready(()));
                 }
 
@@ -176,7 +176,7 @@ impl WebsocketTransportListener {
 
     fn handle_message(&mut self, message: String) {
         if let Ok(Value::Array(vals)) = serde_json::from_str(&message) {
-            trace!("Received websocket message: {:?}", vals);
+            debug!("Received websocket message: {:?}", vals);
             if vals.len() > 0 {
                 if let Some(code) = vals[0].as_u64() {
                     match code {
@@ -186,23 +186,23 @@ impl WebsocketTransportListener {
                         rx::Subscribed::MSG_CODE => self.handle_subscribed(&vals[1..]),
 
                         _ => {
-                            warn!("received unknown message code {}", code);
+                            warn!("Received unknown message code {}", code);
                         }
                     }
                 } else {
-                    warn!("received non-integer message code {:?}", vals[0]);
+                    warn!("Received non-integer message code {:?}", vals[0]);
                 }
             } else {
-                warn!("received zero-length message");
+                warn!("Received zero-length message");
             }
         } else {
-            warn!("received bad or non-array JSON {}", message);
+            warn!("Received bad or non-array JSON {}", message);
         }
     }
 
     fn handle_welcome(&mut self, msg: &[Value]) {
         if msg.len() != 2 {
-            warn!("bad WELCOME message length");
+            warn!("Bad WELCOME message length");
             return;
         }
 
@@ -212,24 +212,24 @@ impl WebsocketTransportListener {
         if let Some(session_id) = msg[0].as_u64() {
             session = Id::<GlobalScope>::from_raw_value(session_id);
         } else {
-            warn!("bad WELCOME message session ID {:?}", msg[0]);
+            warn!("Bad WELCOME message session ID {:?}", msg[0]);
             return;
         }
 
         if let Some(TransportableValue::Dict(details_)) = json_to_tv(&msg[1]) {
             details = details_;
         } else {
-            warn!("bad WELCOME message details {:?}", msg[1]);
+            warn!("Bad WELCOME message details {:?}", msg[1]);
             return;
         }
 
-        trace!("Adding WELCOME message: {:?}, {:?}", session, details);
+        debug!("Adding WELCOME message: {:?}, {:?}", session, details);
         self.received_values.welcome.lock().insert(rx::Welcome { session, details });
     }
 
     fn handle_abort(&mut self, msg: &[Value]) {
         if msg.len() != 2 {
-            warn!("bad ABORT message length");
+            warn!("Bad ABORT message length");
             return;
         }
 
@@ -239,7 +239,7 @@ impl WebsocketTransportListener {
         if let Some(TransportableValue::Dict(details_)) = json_to_tv(&msg[0]) {
             details = details_;
         } else {
-            warn!("bad ABORT message details {:?}", msg[0]);
+            warn!("Bad ABORT message details {:?}", msg[0]);
             return;
         }
 
@@ -247,21 +247,21 @@ impl WebsocketTransportListener {
             if let Some(reason_) = Uri::relaxed(uri_str) {
                 reason = reason_;
             } else {
-                warn!("bad URI in ABORT message reason {:?}", msg[1]);
+                warn!("Bad URI in ABORT message reason {:?}", msg[1]);
                 return;
             }
         } else {
-            warn!("bad ABORT message reason {:?}", msg[1]);
+            warn!("Bad ABORT message reason {:?}", msg[1]);
             return;
         }
 
-        trace!("Adding ABORT message: {:?} {:?}", details, reason);
+        debug!("Adding ABORT message: {:?} {:?}", details, reason);
         self.received_values.abort.lock().insert(rx::Abort { details, reason });
     }
 
     fn handle_goodbye(&mut self, msg: &[Value]) {
         if msg.len() != 2 {
-            warn!("bad GOODBYE message length");
+            warn!("Bad GOODBYE message length");
             return;
         }
 
@@ -271,7 +271,7 @@ impl WebsocketTransportListener {
         if let Some(TransportableValue::Dict(details_)) = json_to_tv(&msg[0]) {
             details = details_;
         } else {
-            warn!("bad GOODBYE message details {:?}", msg[0]);
+            warn!("Bad GOODBYE message details {:?}", msg[0]);
             return;
         }
 
@@ -279,21 +279,21 @@ impl WebsocketTransportListener {
             if let Some(reason_) = Uri::relaxed(uri_str) {
                 reason = reason_;
             } else {
-                warn!("bad URI in GOODBYE message reason {:?}", msg[1]);
+                warn!("Bad URI in GOODBYE message reason {:?}", msg[1]);
                 return;
             }
         } else {
-            warn!("bad GOODBYE message reason {:?}", msg[1]);
+            warn!("Bad GOODBYE message reason {:?}", msg[1]);
             return;
         }
 
-        trace!("Adding GOODBYE message: {:?} {:?}", details, reason);
+        debug!("Adding GOODBYE message: {:?} {:?}", details, reason);
         self.received_values.goodbye.lock().insert(rx::Goodbye { details, reason });
     }
 
     fn handle_subscribed(&mut self, msg: &[Value]) {
         if msg.len() != 2 {
-            warn!("bad SUBSCRIBED message length");
+            warn!("Bad SUBSCRIBED message length");
             return;
         }
 
@@ -303,18 +303,18 @@ impl WebsocketTransportListener {
         if let Some(request_id_raw) = msg[0].as_u64() {
             request = Id::<SessionScope>::from_raw_value(request_id_raw);
         } else {
-            warn!("bad SUBSCRIBED message request ID {:?}", msg[0]);
+            warn!("Bad SUBSCRIBED message request ID {:?}", msg[0]);
             return;
         }
 
         if let Some(subscription_id_raw) = msg[1].as_u64() {
             subscription = Id::<RouterScope>::from_raw_value(subscription_id_raw);
         } else {
-            warn!("bad SUBSCRIBED message subscription ID {:?}", msg[1]);
+            warn!("Bad SUBSCRIBED message subscription ID {:?}", msg[1]);
             return;
         }
 
-        trace!("Adding SUBSCRIBED message: {:?} {:?}", request, subscription);
+        debug!("Adding SUBSCRIBED message: {:?} {:?}", request, subscription);
         self.received_values.subscribed.lock().insert(rx::Subscribed { request, subscription });
     }
 }
@@ -326,7 +326,7 @@ fn json_to_tv(value: &Value) -> Option<TransportableValue> {
         Value::Number(num) => if let Some(val) = num.as_u64() {
             TransportableValue::Integer(val)
         } else {
-            warn!("skipping negative or floating point number {:?}", num);
+            warn!("Skipping negative or floating point number {:?}", num);
             return None
         }
         Value::String(val) => TransportableValue::String(val.clone()),

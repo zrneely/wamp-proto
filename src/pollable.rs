@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn pollable_set_test() {
-        let mut set = Arc::new(Mutex::new(PollableSet::<u32>::new()));
+        let set = Arc::new(Mutex::new(PollableSet::<u32>::new()));
         assert_eq!(0, set.lock().items.len());
         assert_eq!(0, set.lock().len());
 
