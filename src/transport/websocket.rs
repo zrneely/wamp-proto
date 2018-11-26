@@ -454,7 +454,7 @@ mod tests {
             if 2 != val.details.len() {
                 return Err(format!("details dict {:?} did not match", val.details));
             }
-            if "org.foo.bar.error" != val.reason.0 {
+            if "org.foo.bar.error" != val.reason.to_raw() {
                 return Err(format!("reason URI {:?} did not match", val.reason));
             }
             Ok(Async::Ready(()))
@@ -502,7 +502,7 @@ mod tests {
             if 2 != val.details.len() {
                 return Err(format!("details dict {:?} did not match", val.details));
             }
-            if "org.foo.bar.closed" != val.reason.0 {
+            if "org.foo.bar.closed" != val.reason.to_raw() {
                 return Err(format!("reason URI {:?} did not match", val.reason));
             }
             Ok(Async::Ready(()))
@@ -614,7 +614,7 @@ mod tests {
             if 2 != val.details.len() {
                 return Err(format!("details dict {:?} did not match", val.details));
             }
-            if "org.foo.bar.error" != val.reason.0 {
+            if "org.foo.bar.error" != val.reason.to_raw() {
                 return Err(format!("reason URI {:?} did not match", val.reason));
             }
             Ok(Async::Ready(()))
@@ -633,7 +633,7 @@ mod tests {
             if 2 != val.details.len() {
                 return Err(format!("details dict {:?} did not match", val.details));
             }
-            if "org.foo.bar.closed" != val.reason.0 {
+            if "org.foo.bar.closed" != val.reason.to_raw() {
                 return Err(format!("reason URI {:?} did not match", val.reason));
             }
             Ok(Async::Ready(()))

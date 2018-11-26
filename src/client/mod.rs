@@ -4,14 +4,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use failure::Error;
-use futures::{Async, Future};
+use futures::{Async, future::{self, Either, Future}};
 use parking_lot::Mutex;
 use tokio::timer::Delay;
 
-use {ConnectResult, Id, GlobalScope, ReceivedValues, RouterScope, Uri, TransportableValue as TV, Transport};
+use {
+    ConnectResult, Id, GlobalScope, ReceivedValues, RouterScope, Uri, TransportableValue as TV, Transport,
+    known_uri
+};
 use error::WampError;
 
 mod initialize;
+mod close;
+
 #[cfg(feature = "subscriber")]
 mod subscribe;
 
@@ -84,6 +89,7 @@ pub struct Client<T: Transport> {
 
     session_id: Id<GlobalScope>,
     timeout_duration: Duration,
+    shutdown_timeout_duration: Duration,
     router_capabilities: RouterCapabilities,
 
     state: ClientState,
@@ -112,10 +118,8 @@ impl <T: Transport> Client<T> {
         let ClientConfig { url, realm, timeout, shutdown_timeout } = config;
         let ConnectResult { future, received_values } = T::connect(url);
 
-        // TODO: consume the shutdown_timeout
-
         future.and_then(move |transport| {
-            initialize::InitializeFuture::new(transport, received_values, realm, timeout)
+            initialize::InitializeFuture::new(transport, received_values, realm, timeout, shutdown_timeout)
         })
     }
 
@@ -201,15 +205,22 @@ impl <T: Transport> Client<T> {
     //    unimplemented!()
     //}
 
-    /// Closes the connection to the server.
-    fn close(&mut self) {
-        self.state = ClientState::ShuttingDown;
-        unimplemented!()
+    /// Closes the connection to the server. The returned future resolves with success if
+    /// the connected router actively acknowledges our disconnect within the shutdown_timeout,
+    /// and resolves with an error otherwise. After this is called, all incoming messages except
+    /// acknowledgement of our disconnection is ignored.
+    fn close(&mut self, reason: Uri) -> impl Future<Item = (), Error = Error> {
+        if self.state != ClientState::Established {
+            Either::A(future::err(WampError::InvalidClientState.into()))
+        } else {
+            self.state = ClientState::ShuttingDown;
+            Either::B(close::CloseFuture::new(self, reason))
+        }
     }
 }
 impl<T: Transport> Drop for Client<T> {
     fn drop(&mut self) {
-        self.close();
+        self.close(Uri::raw(known_uri::session_close::system_shutdown.to_string()));
     }
 }
 

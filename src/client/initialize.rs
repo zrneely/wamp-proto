@@ -12,17 +12,19 @@ use {ReceivedValues, Transport, TransportableValue as TV, Uri};
 use client::{Client, ClientState, RouterCapabilities};
 use proto::TxMessage;
 
+#[derive(Debug)]
 enum InitializeFutureState {
     StartSendHello(Option<TxMessage>),
     SendHello,
     WaitWelcome,
 }
 
-pub(crate) struct InitializeFuture<T: Transport> {
+pub(super) struct InitializeFuture<T: Transport> {
     state: InitializeFutureState,
 
     timeout: Delay,
     timeout_duration: Duration,
+    shutdown_timeout_duration: Duration,
 
     sender: Arc<Mutex<T>>,
     received: ReceivedValues,
@@ -33,6 +35,7 @@ impl <T> InitializeFuture<T> where T: Transport {
         received: ReceivedValues,
         realm: Uri,
         timeout_duration: Duration,
+        shutdown_timeout_duration: Duration,
     ) -> Self {
         let timeout = Delay::new(Instant::now() + timeout_duration);
         sender.listen();
@@ -62,7 +65,7 @@ impl <T> InitializeFuture<T> where T: Transport {
                 },
             })),
 
-            timeout, timeout_duration,
+            timeout, timeout_duration, shutdown_timeout_duration,
 
             sender: Arc::new(Mutex::new(sender)),
             received,
@@ -75,14 +78,13 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
 
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         loop {
-            // Before running the state machine, check for timeout or errors.
+            trace!("InitializeFuture: {:?}", self.state);
             super::check_for_timeout_or_error(&mut self.timeout, &mut self.received)?;
 
             let mut pending = false;
             self.state = match self.state {
                 // Step 1: Add the hello message to the sender's message queue.
                 InitializeFutureState::StartSendHello(ref mut message) => {
-                    trace!("InitializeFutureState::StartSendHello");
                     let message = message.take().expect("invalid InitializeFutureState");
                     match self.sender.lock().start_send(message)? {
                         AsyncSink::NotReady(message) => {
@@ -95,7 +97,6 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
 
                 // Step 2: Wait for the sender's message queue to empty.
                 InitializeFutureState::SendHello => {
-                    trace!("InitializeFutureState::SendHello");
                     match self.sender.lock().poll_complete()? {
                         Async::NotReady => {
                             pending = true;
@@ -107,7 +108,6 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
 
                 // Step 3: Wait for a rx::Welcome message.
                 InitializeFutureState::WaitWelcome => {
-                    trace!("InitializeFutureState::WaitWelcome");
                     match self.received.welcome.lock().poll_take(|_| true) {
                         Async::NotReady => {
                             pending = true;
@@ -121,6 +121,7 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
 
                                 session_id: msg.session,
                                 timeout_duration: self.timeout_duration,
+                                shutdown_timeout_duration: self.shutdown_timeout_duration,
                                 router_capabilities: RouterCapabilities::from_details(&msg.details),
 
                                 // We've already sent our "hello" and received our "welcome".
