@@ -1,18 +1,24 @@
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use failure::Error;
-use futures::{Async, future::{self, Either, Future}, sync::oneshot};
+use futures::{
+    future::{self, Either, Future},
+    sync::oneshot,
+    Async,
+};
 use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
-use {ConnectResult, Id, GlobalScope, ReceivedValues, RouterScope, Uri, TransportableValue as TV, Transport};
 use error::WampError;
+use {
+    ConnectResult, GlobalScope, Id, ReceivedValues, RouterScope, Transport,
+    TransportableValue as TV, Uri,
+};
 
-mod initialize;
 mod close;
+mod initialize;
 
 #[cfg(feature = "subscriber")]
 mod subscribe;
@@ -22,8 +28,8 @@ fn check_for_timeout(timeout: &mut Delay) -> Result<(), Error> {
     match timeout.poll()? {
         Async::Ready(_) => {
             info!("Timeout detected!");
-            return Err(WampError::Timeout.into())
-        },
+            return Err(WampError::Timeout.into());
+        }
         _ => {}
     };
     Ok(())
@@ -80,7 +86,8 @@ impl<'a> ClientConfig<'a> {
     /// * `panic_on_drop_while_open`: true
     pub fn new(url: &'a str, realm: Uri) -> Self {
         ClientConfig {
-            url, realm,
+            url,
+            realm,
             timeout: Duration::from_secs(10),
             shutdown_timeout: Duration::from_secs(1),
             panic_on_drop_while_open: true,
@@ -119,7 +126,7 @@ impl<T: Transport> std::fmt::Debug for Client<T> {
         )
     }
 }
-impl <T: Transport> Client<T> {
+impl<T: Transport> Client<T> {
     /// Begins initialization of a new [`Client`]. See [`ClientConfig`] for details.
     ///
     /// The client will attempt to connect to the WAMP router at the given URL and join the given
@@ -130,11 +137,16 @@ impl <T: Transport> Client<T> {
     /// specify the type of transport.
     pub fn new<'a>(config: ClientConfig<'a>) -> impl Future<Item = Self, Error = Error> {
         let ClientConfig {
-            url, realm,
-            timeout, shutdown_timeout,
-            panic_on_drop_while_open
+            url,
+            realm,
+            timeout,
+            shutdown_timeout,
+            panic_on_drop_while_open,
         } = config;
-        let ConnectResult { future, received_values } = T::connect(url);
+        let ConnectResult {
+            future,
+            received_values,
+        } = T::connect(url);
 
         future.and_then(move |transport| {
             initialize::InitializeFuture::new(
@@ -218,9 +230,14 @@ impl <T: Transport> Client<T> {
     /// * If the router does not acknowledge the subscription within the client timeout period, the returned
     /// future will resolve with an error.
     #[cfg(feature = "subscriber")]
-    pub fn subscribe<F>(&mut self, topic: Uri, handler: F) -> impl Future<Item = Id<RouterScope>, Error = Error>
-        where F: 'static + (Fn(Broadcast) -> Box<Future<Item = (), Error = Error>>) + Send {
-
+    pub fn subscribe<F>(
+        &mut self,
+        topic: Uri,
+        handler: F,
+    ) -> impl Future<Item = Id<RouterScope>, Error = Error>
+    where
+        F: 'static + Fn(Broadcast) -> Box<Future<Item = (), Error = Error>> + Send,
+    {
         if *self.state.read() != ClientState::Established {
             Either::A(future::err(WampError::InvalidClientState.into()))
         } else if !self.router_capabilities.broker {
@@ -229,7 +246,9 @@ impl <T: Transport> Client<T> {
             Either::B(subscribe::SubscriptionFuture::new(
                 self,
                 topic,
-                BroadcastHandler { target: Box::new(handler) }
+                BroadcastHandler {
+                    target: Box::new(handler),
+                },
             ))
         }
     }
@@ -249,7 +268,7 @@ impl <T: Transport> Client<T> {
         {
             let mut state_lock = self.state.write();
             if *state_lock != ClientState::Established {
-                return Either::A(future::err(WampError::InvalidClientState.into()))
+                return Either::A(future::err(WampError::InvalidClientState.into()));
             } else {
                 *state_lock = ClientState::ShuttingDown;
 
@@ -283,7 +302,10 @@ impl<T: Transport> Drop for Client<T> {
     fn drop(&mut self) {
         let state = self.state.read();
         if *state != ClientState::Closed {
-            error!("Client was not closed before being dropped (actual state: {:?})!", *state);
+            error!(
+                "Client was not closed before being dropped (actual state: {:?})!",
+                *state
+            );
 
             if self.panic_on_drop_while_open {
                 panic!("Client was not closed before being dropped!");
@@ -309,7 +331,7 @@ impl RouterCapabilities {
             _ => RouterCapabilities {
                 broker: false,
                 dealer: false,
-            }
+            },
         }
     }
 }

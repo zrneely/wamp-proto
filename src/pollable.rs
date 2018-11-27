@@ -1,6 +1,5 @@
-
-use futures::Async;
 use futures::task::{self, Task};
+use futures::Async;
 
 /// A set which registers interest in a potential value if a query finds no result. Requires
 /// external synchronization.
@@ -16,7 +15,7 @@ impl<T> Default for PollableSet<T> {
         PollableSet::new()
     }
 }
-impl <T> PollableSet<T> {
+impl<T> PollableSet<T> {
     /// Creates a new pollable set.
     pub fn new() -> Self {
         PollableSet {
@@ -36,8 +35,16 @@ impl <T> PollableSet<T> {
     ///
     /// If multiple values match the predicate, only the first added is returned.
     pub fn poll_take<F>(&mut self, mut predicate: F) -> Async<T>
-        where F: FnMut(&T) -> bool {
-        match self.items.iter().enumerate().filter(|&(_, t): &(usize, &T)| predicate(t)).next() {
+    where
+        F: FnMut(&T) -> bool,
+    {
+        match self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|&(_, t): &(usize, &T)| predicate(t))
+            .next()
+        {
             Some((idx, _)) => {
                 let value = self.items.remove(idx);
                 Async::Ready(value)
@@ -70,9 +77,9 @@ impl <T> PollableSet<T> {
 mod tests {
     use super::*;
 
-    use std::sync::Arc;
     use futures::future::poll_fn;
     use parking_lot::Mutex;
+    use std::sync::Arc;
     use tokio::runtime::current_thread;
 
     #[test]

@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -8,10 +7,10 @@ use futures::{Async, AsyncSink, Future};
 use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
-use {ReceivedValues, Transport, Uri};
 use client::{Client, ClientState};
 use error::WampError;
 use proto::TxMessage;
+use {ReceivedValues, Transport, Uri};
 
 #[derive(Debug)]
 enum CloseFutureState {
@@ -29,7 +28,10 @@ pub(super) struct CloseFuture<T: Transport> {
     received: ReceivedValues,
     client_state: Arc<RwLock<ClientState>>,
 }
-impl<T> CloseFuture<T> where T: Transport {
+impl<T> CloseFuture<T>
+where
+    T: Transport,
+{
     pub fn new(client: &mut Client<T>, reason: Uri) -> Self {
         CloseFuture {
             state: CloseFutureState::StartSendGoodbye(Some(TxMessage::Goodbye {
@@ -45,7 +47,10 @@ impl<T> CloseFuture<T> where T: Transport {
         }
     }
 }
-impl<T> Future for CloseFuture<T> where T: Transport {
+impl<T> Future for CloseFuture<T>
+where
+    T: Transport,
+{
     type Item = ();
     type Error = Error;
 
@@ -55,11 +60,11 @@ impl<T> Future for CloseFuture<T> where T: Transport {
             super::check_for_timeout(&mut self.timeout)?;
 
             match *self.client_state.read() {
-                ClientState::ShuttingDown => {},
+                ClientState::ShuttingDown => {}
                 ref state => {
                     error!("CloseFuture with unexpected client state {:?}", state);
-                    return Err(WampError::InvalidClientState.into())
-                },
+                    return Err(WampError::InvalidClientState.into());
+                }
             }
 
             let mut pending = false;
@@ -78,15 +83,13 @@ impl<T> Future for CloseFuture<T> where T: Transport {
                 }
 
                 // Step 2: Wait for the sender's message queue to empty. If it's not empty, return NotReady.
-                CloseFutureState::SendGoodbye => {
-                    match self.sender.lock().poll_complete()? {
-                        Async::NotReady => {
-                            pending = true;
-                            CloseFutureState::SendGoodbye
-                        }
-                        Async::Ready(_) => CloseFutureState::WaitGoodbye,
+                CloseFutureState::SendGoodbye => match self.sender.lock().poll_complete()? {
+                    Async::NotReady => {
+                        pending = true;
+                        CloseFutureState::SendGoodbye
                     }
-                }
+                    Async::Ready(_) => CloseFutureState::WaitGoodbye,
+                },
 
                 // Step 3: Wait for the goodbye response from the router.
                 CloseFutureState::WaitGoodbye => {
@@ -96,16 +99,19 @@ impl<T> Future for CloseFuture<T> where T: Transport {
                             CloseFutureState::WaitGoodbye
                         }
                         Async::Ready(msg) => {
-                            info!("WAMP session closed: response {:?} ({:?})", msg.details, msg.reason);
+                            info!(
+                                "WAMP session closed: response {:?} ({:?})",
+                                msg.details, msg.reason
+                            );
                             *self.client_state.write() = ClientState::Closed;
-                            return Ok(Async::Ready(()))
+                            return Ok(Async::Ready(()));
                         }
                     }
                 }
             };
 
             if pending {
-                return Ok(Async::NotReady)
+                return Ok(Async::NotReady);
             }
         }
     }

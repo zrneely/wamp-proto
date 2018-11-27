@@ -1,37 +1,32 @@
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use failure::Error;
 use futures::{
-    Async,
-    AsyncSink,
     future::{self, Future},
     sink::Sink,
-    stream::{Stream, SplitSink, SplitStream},
+    stream::{SplitSink, SplitStream, Stream},
     sync::oneshot,
+    Async, AsyncSink,
 };
 use http::HeaderMap;
 use parking_lot::Mutex;
 use serde_json::{self, Value};
 use tokio::reactor;
 use websocket::{
-    ClientBuilder,
-    async::{
-        TcpStream,
-        client::Client,
-    },
+    async::{client::Client, TcpStream},
     message::{Message, OwnedMessage},
+    ClientBuilder,
 };
 
-use {
-    ConnectResult, GlobalScope, Id, ReceivedValues, RouterScope, SessionScope,
-    Transport, TransportableValue, Uri
-};
 use error::WampError;
 use proto::{
     rx::{self, RxMessage},
     TxMessage,
+};
+use {
+    ConnectResult, GlobalScope, Id, ReceivedValues, RouterScope, SessionScope, Transport,
+    TransportableValue, Uri,
 };
 
 /// An implementation of a websocket-based WAMP Transport.
@@ -51,16 +46,19 @@ impl Sink for WebsocketTransport {
     type SinkItem = TxMessage;
     type SinkError = Error;
 
-    fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
+    fn start_send(
+        &mut self,
+        item: Self::SinkItem,
+    ) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
         let value = item.to_json();
         if let Some(ref mut client) = self.client {
             let message = Message::text(serde_json::to_string(&value)?).into();
-            client.start_send(message).map(|async| {
-                match async {
+            client
+                .start_send(message)
+                .map(|async| match async {
                     AsyncSink::NotReady(_) => AsyncSink::NotReady(item),
                     AsyncSink::Ready => AsyncSink::Ready,
-                }
-            }).map_err(|e| e.into())
+                }).map_err(|e| e.into())
         } else {
             Err(WampError::TransportStreamClosed.into())
         }
@@ -82,9 +80,11 @@ impl Transport for WebsocketTransport {
         let received_values = ReceivedValues::default();
 
         let future: Box<Future<Item = _, Error = Error> + Send> = match ClientBuilder::new(url) {
-            Ok(builder) => Box::new(builder
-                .async_connect_insecure(&reactor::Handle::current())
-                .map_err(|e| e.into())),
+            Ok(builder) => Box::new(
+                builder
+                    .async_connect_insecure(&reactor::Handle::current())
+                    .map_err(|e| e.into()),
+            ),
             Err(e) => Box::new(future::err(e.into())),
         };
 
@@ -98,10 +98,15 @@ impl Transport for WebsocketTransport {
     }
 
     fn listen(&mut self) {
-        if let (stream, Some(received_values)) = (self.stream.clone(), self.received_values.take()) {
+        if let (stream, Some(received_values)) = (self.stream.clone(), self.received_values.take())
+        {
             let (sender, stop_receiver) = oneshot::channel();
             self.listener_stop_sender = Some(sender);
-            tokio::spawn(WebsocketTransportListener { stream, received_values, stop_receiver });
+            tokio::spawn(WebsocketTransportListener {
+                stream,
+                received_values,
+                stop_receiver,
+            });
         } else {
             warn!("WebsocketTransport::listen called multiple times!");
         }
@@ -154,12 +159,12 @@ impl WebsocketTransportListener {
         loop {
             match self.stop_receiver.poll() {
                 // we haven't been told to stop
-                Ok(Async::NotReady) => {},
+                Ok(Async::NotReady) => {}
                 // either we have been told to stop, or the sender was dropped, in which case
                 // we should also stop
                 Ok(Async::Ready(_)) | Err(_) => {
                     debug!("WebsocketTransportListener told to stop!");
-                    return Ok(Async::Ready(()))
+                    return Ok(Async::Ready(()));
                 }
             }
 
@@ -243,7 +248,10 @@ impl WebsocketTransportListener {
         }
 
         debug!("Adding WELCOME message: {:?}, {:?}", session, details);
-        self.received_values.welcome.lock().insert(rx::Welcome { session, details });
+        self.received_values
+            .welcome
+            .lock()
+            .insert(rx::Welcome { session, details });
     }
 
     fn handle_abort(&mut self, msg: &[Value]) {
@@ -275,7 +283,10 @@ impl WebsocketTransportListener {
         }
 
         debug!("Adding ABORT message: {:?} {:?}", details, reason);
-        self.received_values.abort.lock().insert(rx::Abort { details, reason });
+        self.received_values
+            .abort
+            .lock()
+            .insert(rx::Abort { details, reason });
     }
 
     fn handle_goodbye(&mut self, msg: &[Value]) {
@@ -307,7 +318,10 @@ impl WebsocketTransportListener {
         }
 
         debug!("Adding GOODBYE message: {:?} {:?}", details, reason);
-        self.received_values.goodbye.lock().insert(rx::Goodbye { details, reason });
+        self.received_values
+            .goodbye
+            .lock()
+            .insert(rx::Goodbye { details, reason });
     }
 
     fn handle_subscribed(&mut self, msg: &[Value]) {
@@ -333,8 +347,17 @@ impl WebsocketTransportListener {
             return;
         }
 
-        debug!("Adding SUBSCRIBED message: {:?} {:?}", request, subscription);
-        self.received_values.subscribed.lock().insert(rx::Subscribed { request, subscription });
+        debug!(
+            "Adding SUBSCRIBED message: {:?} {:?}",
+            request, subscription
+        );
+        self.received_values
+            .subscribed
+            .lock()
+            .insert(rx::Subscribed {
+                request,
+                subscription,
+            });
     }
 }
 
@@ -346,12 +369,12 @@ fn json_to_tv(value: &Value) -> Option<TransportableValue> {
             TransportableValue::Integer(val)
         } else {
             warn!("Skipping negative or floating point number {:?}", num);
-            return None
-        }
+            return None;
+        },
         Value::String(val) => TransportableValue::String(val.clone()),
-        Value::Array(vals) => TransportableValue::List(
-            vals.into_iter().filter_map(json_to_tv).collect()
-        ),
+        Value::Array(vals) => {
+            TransportableValue::List(vals.into_iter().filter_map(json_to_tv).collect())
+        }
         Value::Object(vals) => {
             let mut result = HashMap::<String, TransportableValue>::new();
             for (k, v) in vals {
@@ -383,12 +406,13 @@ impl Future for WebsocketTransportConnectFuture {
                 return Ok(Async::Ready(WebsocketTransport {
                     client: Some(client),
                     stream: Arc::new(Mutex::new(Some(stream))),
-                    received_values: Some(self.received_values
-                        .take()
-                        .expect("invalid WebsocketTransportConnectFuture state")
+                    received_values: Some(
+                        self.received_values
+                            .take()
+                            .expect("invalid WebsocketTransportConnectFuture state"),
                     ),
                     listener_stop_sender: None,
-                }))
+                }));
             }
         }
     }
@@ -396,7 +420,7 @@ impl Future for WebsocketTransportConnectFuture {
 
 /// Returned by [`WebsocketTransport::close`]; resolves to nothing.
 pub struct WebsocketTransportCloseFuture {
-    client: Option<SplitSink<Client<TcpStream>>>
+    client: Option<SplitSink<Client<TcpStream>>>,
 }
 impl Future for WebsocketTransportCloseFuture {
     type Item = ();
@@ -424,9 +448,9 @@ mod tests {
     use futures::future::poll_fn;
     use tokio::runtime::current_thread;
 
+    use parking_lot::Mutex;
     use std::io::{self, prelude::*};
     use std::sync::Arc;
-    use parking_lot::Mutex;
 
     #[derive(Clone)]
     struct MockRead {
@@ -460,26 +484,14 @@ mod tests {
 
     #[test]
     fn json_to_tv_test_integer() {
-        assert_eq!(
-            Some(TransportableValue::Integer(4)),
-            json_to_tv(&json!(4))
-        );
-        assert_eq!(
-            Some(TransportableValue::Integer(0)),
-            json_to_tv(&json!(0))
-        );
+        assert_eq!(Some(TransportableValue::Integer(4)), json_to_tv(&json!(4)));
+        assert_eq!(Some(TransportableValue::Integer(0)), json_to_tv(&json!(0)));
         assert_eq!(
             Some(TransportableValue::Integer(0x7FFF_FFFF_FFFF_FFFF)),
             json_to_tv(&json!(0x7FFF_FFFF_FFFF_FFFFu64))
         );
-        assert_eq!(
-            None,
-            json_to_tv(&json!(-1))
-        );
-        assert_eq!(
-            None,
-            json_to_tv(&json!(-3))
-        );
+        assert_eq!(None, json_to_tv(&json!(-1)));
+        assert_eq!(None, json_to_tv(&json!(-3)));
     }
 
     #[test]
@@ -502,10 +514,10 @@ mod tests {
                 res
             });
             if Id::<GlobalScope>::from_raw_value(12345) != val.session {
-                return Err(format!("session id {:?} did not match", val.session))
+                return Err(format!("session id {:?} did not match", val.session));
             }
             if 2 != val.details.len() {
-                return Err(format!("details dict {:?} did not match", val.details))
+                return Err(format!("details dict {:?} did not match", val.details));
             }
             Ok(Async::Ready(()))
         });
@@ -574,7 +586,11 @@ mod tests {
         assert_eq!(0, rv.len());
 
         println!("Scenario 5: Too many arguments");
-        listener.handle_abort(&[json!({"x": 1, "y": true}), json!("org.foo.bar.error"), json!(12345)]);
+        listener.handle_abort(&[
+            json!({"x": 1, "y": true}),
+            json!("org.foo.bar.error"),
+            json!(12345),
+        ]);
         assert_eq!(0, rv.len());
     }
 
@@ -624,7 +640,11 @@ mod tests {
         assert_eq!(0, rv.len());
 
         println!("Scenario 5: Too many arguments");
-        listener.handle_goodbye(&[json!({"x": 1, "y": true}), json!("org.foo.bar.closed"), json!(12345)]);
+        listener.handle_goodbye(&[
+            json!({"x": 1, "y": true}),
+            json!("org.foo.bar.closed"),
+            json!(12345),
+        ]);
         assert_eq!(0, rv.len());
     }
 
@@ -652,7 +672,10 @@ mod tests {
                 return Err(format!("request ID {:?} did not match", val.request));
             }
             if Id::<RouterScope>::from_raw_value(23456) != val.subscription {
-                return Err(format!("subscription ID {:?} did not match", val.subscription));
+                return Err(format!(
+                    "subscription ID {:?} did not match",
+                    val.subscription
+                ));
             }
             Ok(Async::Ready(()))
         });
@@ -695,10 +718,10 @@ mod tests {
                 res
             });
             if Id::<GlobalScope>::from_raw_value(12345) != val.session {
-                return Err(format!("session id {:?} did not match", val.session))
+                return Err(format!("session id {:?} did not match", val.session));
             }
             if 2 != val.details.len() {
-                return Err(format!("details dict {:?} did not match", val.details))
+                return Err(format!("details dict {:?} did not match", val.details));
             }
             Ok(Async::Ready(()))
         });

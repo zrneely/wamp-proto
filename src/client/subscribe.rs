@@ -1,18 +1,17 @@
-
 use std::collections::HashMap;
-use std::{cmp, fmt, hash};
 use std::sync::Arc;
 use std::time::Instant;
+use std::{cmp, fmt, hash};
 
 use failure::Error;
-use futures::{Async, AsyncSink, Future, sync::oneshot};
+use futures::{sync::oneshot, Async, AsyncSink, Future};
 use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
-use {Id, ReceivedValues, RouterScope, SessionScope, Transport, Uri};
 use client::{BroadcastHandler, Client, ClientState};
 use error::WampError;
 use proto::TxMessage;
+use {Id, ReceivedValues, RouterScope, SessionScope, Transport, Uri};
 
 /// The result of subscribing to a channel.
 pub(super) struct Subscription {
@@ -23,7 +22,11 @@ pub(super) struct Subscription {
 }
 impl fmt::Debug for Subscription {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Subscription {{ subscription_id: {:?} }}", self.subscription_id)
+        write!(
+            f,
+            "Subscription {{ subscription_id: {:?} }}",
+            self.subscription_id
+        )
     }
 }
 impl cmp::PartialEq for Subscription {
@@ -55,7 +58,7 @@ impl Future for SubscriptionListener {
         loop {
             match self.stop_receiver.poll() {
                 // We haven't been told to stop
-                Ok(Async::NotReady) => {},
+                Ok(Async::NotReady) => {}
                 // Either we've been told to stop, or the sender was dropped, in
                 // which case we should stop anyway.
                 Ok(Async::Ready(_)) | Err(_) => {
@@ -64,14 +67,21 @@ impl Future for SubscriptionListener {
                 }
             }
 
-            let poll_result = self.values.event.lock().poll_take(|evt| evt.subscription == self.subscription_id);
+            let poll_result = self
+                .values
+                .event
+                .lock()
+                .poll_take(|evt| evt.subscription == self.subscription_id);
             match poll_result {
                 Async::Ready(event) => {
                     // TODO: convert the event to a "broadcast" object and invoke the callback
                     // TODO: invoke the callback as part of this Future (add state machine), or on its own task?
-                    info!("Subscription {:?} received event: {:?}", self.subscription_id, event);
+                    info!(
+                        "Subscription {:?} received event: {:?}",
+                        self.subscription_id, event
+                    );
                     unimplemented!();
-                },
+                }
 
                 // Nothing available yet
                 Async::NotReady => return Ok(Async::NotReady),
@@ -101,7 +111,7 @@ pub(super) struct SubscriptionFuture<T: Transport> {
     subscriptions: Arc<Mutex<HashMap<Id<RouterScope>, Subscription>>>,
     client_state: Arc<RwLock<ClientState>>,
 }
-impl <T: Transport> SubscriptionFuture<T> {
+impl<T: Transport> SubscriptionFuture<T> {
     pub(super) fn new(client: &mut Client<T>, topic: Uri, handler: BroadcastHandler) -> Self {
         let request_id = Id::<SessionScope>::next();
         SubscriptionFuture {
@@ -111,7 +121,8 @@ impl <T: Transport> SubscriptionFuture<T> {
                 options: HashMap::new(),
             })),
 
-            topic, request_id,
+            topic,
+            request_id,
             handler: Some(handler),
             timeout: Delay::new(Instant::now() + client.timeout_duration),
 
@@ -122,7 +133,7 @@ impl <T: Transport> SubscriptionFuture<T> {
         }
     }
 }
-impl <T: Transport> Future for SubscriptionFuture<T> {
+impl<T: Transport> Future for SubscriptionFuture<T> {
     type Item = Id<RouterScope>;
     type Error = Error;
 
@@ -132,11 +143,14 @@ impl <T: Transport> Future for SubscriptionFuture<T> {
             super::check_for_timeout(&mut self.timeout)?;
 
             match *self.client_state.read() {
-                ClientState::Established => {},
+                ClientState::Established => {}
                 ref state => {
-                    error!("SubscriptionFuture with unexpected client state {:?}", state);
-                    return Err(WampError::InvalidClientState.into())
-                },
+                    error!(
+                        "SubscriptionFuture with unexpected client state {:?}",
+                        state
+                    );
+                    return Err(WampError::InvalidClientState.into());
+                }
             }
 
             let mut pending = false;
@@ -169,39 +183,46 @@ impl <T: Transport> Future for SubscriptionFuture<T> {
                 // Step 3: Wait for a rx::Welcome from the receiver. If we haven't yet received
                 // one, return NotReady. Through the magic of PollableSet, the current
                 // task will be notified when a new Subscribed message arrives.
-                SubscriptionFutureState::WaitSubscribed => {
-                    match self.received.subscribed.lock().poll_take(
-                        |msg| msg.request == self.request_id
-                    ) {
-                        Async::NotReady => {
-                            pending = true;
-                            SubscriptionFutureState::WaitSubscribed
-                        }
-                        Async::Ready(msg) => {
-                            let (sender, receiver) = oneshot::channel();
+                SubscriptionFutureState::WaitSubscribed => match self
+                    .received
+                    .subscribed
+                    .lock()
+                    .poll_take(|msg| msg.request == self.request_id)
+                {
+                    Async::NotReady => {
+                        pending = true;
+                        SubscriptionFutureState::WaitSubscribed
+                    }
+                    Async::Ready(msg) => {
+                        let (sender, receiver) = oneshot::channel();
 
-                            let listener = SubscriptionListener {
-                                values: self.received.clone(),
-                                stop_receiver: receiver,
-                                subscription_id: msg.subscription,
-                                handler: self.handler.take().unwrap(),
-                            };
-                            tokio::spawn(listener);
+                        let listener = SubscriptionListener {
+                            values: self.received.clone(),
+                            stop_receiver: receiver,
+                            subscription_id: msg.subscription,
+                            handler: self.handler.take().unwrap(),
+                        };
+                        tokio::spawn(listener);
 
-                            info!("Subscribed to {:?} (ID: {:?})", self.topic, msg.subscription);
-                            self.subscriptions.lock().insert(msg.subscription, Subscription {
+                        info!(
+                            "Subscribed to {:?} (ID: {:?})",
+                            self.topic, msg.subscription
+                        );
+                        self.subscriptions.lock().insert(
+                            msg.subscription,
+                            Subscription {
                                 subscription_id: msg.subscription,
                                 listener_stop_sender: sender,
-                            });
+                            },
+                        );
 
-                            return Ok(Async::Ready(msg.subscription))
-                        }
+                        return Ok(Async::Ready(msg.subscription));
                     }
-                }
+                },
             };
 
             if pending {
-                return Ok(Async::NotReady)
+                return Ok(Async::NotReady);
             }
         }
     }

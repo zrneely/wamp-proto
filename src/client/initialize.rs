@@ -1,17 +1,16 @@
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use failure::Error;
-use futures::{Async, AsyncSink, Future, sync::oneshot};
+use futures::{sync::oneshot, Async, AsyncSink, Future};
 use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
-use {ReceivedValues, Transport, TransportableValue as TV};
 use client::{Client, ClientState, RouterCapabilities};
 use proto::TxMessage;
-use uri::{Uri, known_uri};
+use uri::{known_uri, Uri};
+use {ReceivedValues, Transport, TransportableValue as TV};
 
 #[derive(Debug)]
 enum ProtocolMessageListenerState {
@@ -39,7 +38,7 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
         loop {
             match self.stop_receiver.poll() {
                 // We haven't been told to stop
-                Ok(Async::NotReady) => {},
+                Ok(Async::NotReady) => {}
                 // Either we've been told to stop or the sender was dropped,
                 // in which case we should stop anyway.
                 Ok(Async::Ready(_)) | Err(_) => {
@@ -54,7 +53,10 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                     // Poll for ABORT
                     match self.values.abort.lock().poll_take(|_| true) {
                         Async::Ready(msg) => {
-                            warn!("Received ABORT from router: \"{:?}\" ({:?})", msg.reason, msg.details);
+                            warn!(
+                                "Received ABORT from router: \"{:?}\" ({:?})",
+                                msg.reason, msg.details
+                            );
                             *self.client_state.write() = ClientState::Closed;
                             ProtocolMessageListenerState::StopAllTasks
                         }
@@ -62,7 +64,10 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                         // Poll for GOODBYE
                         Async::NotReady => match self.values.goodbye.lock().poll_take(|_| true) {
                             Async::Ready(msg) => {
-                                info!("Received GOODBYE from router: \"{:?}\" ({:?})", msg.reason, msg.details);
+                                info!(
+                                    "Received GOODBYE from router: \"{:?}\" ({:?})",
+                                    msg.reason, msg.details
+                                );
                                 *self.client_state.write() = ClientState::Closing;
                                 ProtocolMessageListenerState::StartReplyGoodbye
                             }
@@ -70,7 +75,7 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                                 pending = true;
                                 ProtocolMessageListenerState::Ready
                             }
-                        }
+                        },
                     }
                 }
 
@@ -79,7 +84,10 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                         details: HashMap::new(),
                         reason: Uri::raw(known_uri::session_close::goodbye_and_out.to_string()),
                     };
-                    debug!("ProtocolMessageListenerState sending GOODBYE response: {:?}", message);
+                    debug!(
+                        "ProtocolMessageListenerState sending GOODBYE response: {:?}",
+                        message
+                    );
                     match self.sender.lock().start_send(message) {
                         Ok(AsyncSink::NotReady(_)) => {
                             pending = true;
@@ -88,7 +96,7 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                         Ok(AsyncSink::Ready) => ProtocolMessageListenerState::SendGoodbye,
                         Err(e) => {
                             error!("ProtocolMessageListener got err {:?} while initiating GOODBYE response!", e);
-                            return Err(())
+                            return Err(());
                         }
                     }
                 }
@@ -101,7 +109,7 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                         Ok(Async::Ready(_)) => ProtocolMessageListenerState::StopAllTasks,
                         Err(e) => {
                             error!("ProtocolMessageListener got err {:?} while flushing GOODBYE response!", e);
-                            return Err(())
+                            return Err(());
                         }
                     }
                 }
@@ -111,12 +119,12 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                     // TODO: somehow stop all tasks. Do we just have to store stop signal Senders
                     // for everything here? They are Send + Sync so that's possible. It would be more
                     // convenient for all the tasks to live in one "ClientTaskTracker" struct or something.
-                    return Ok(Async::Ready(()))
+                    return Ok(Async::Ready(()));
                 }
             };
 
             if pending {
-                return Ok(Async::NotReady)
+                return Ok(Async::NotReady);
             }
         }
     }
@@ -141,7 +149,10 @@ pub(super) struct InitializeFuture<T: Transport + 'static> {
     sender: Arc<Mutex<T>>,
     received: ReceivedValues,
 }
-impl <T> InitializeFuture<T> where T: Transport + 'static {
+impl<T> InitializeFuture<T>
+where
+    T: Transport + 'static,
+{
     pub(crate) fn new(
         mut sender: T,
         received: ReceivedValues,
@@ -178,14 +189,20 @@ impl <T> InitializeFuture<T> where T: Transport + 'static {
                 },
             })),
 
-            timeout, timeout_duration, shutdown_timeout_duration, panic_on_drop_while_open,
+            timeout,
+            timeout_duration,
+            shutdown_timeout_duration,
+            panic_on_drop_while_open,
 
             sender: Arc::new(Mutex::new(sender)),
             received,
         }
     }
 }
-impl <T> Future for InitializeFuture<T> where T: Transport + 'static {
+impl<T> Future for InitializeFuture<T>
+where
+    T: Transport + 'static,
+{
     type Item = Client<T>;
     type Error = Error;
 
@@ -209,15 +226,13 @@ impl <T> Future for InitializeFuture<T> where T: Transport + 'static {
                 }
 
                 // Step 2: Wait for the sender's message queue to empty.
-                InitializeFutureState::SendHello => {
-                    match self.sender.lock().poll_complete()? {
-                        Async::NotReady => {
-                            pending = true;
-                            InitializeFutureState::SendHello
-                        }
-                        Async::Ready(_) => InitializeFutureState::WaitWelcome
+                InitializeFutureState::SendHello => match self.sender.lock().poll_complete()? {
+                    Async::NotReady => {
+                        pending = true;
+                        InitializeFutureState::SendHello
                     }
-                }
+                    Async::Ready(_) => InitializeFutureState::WaitWelcome,
+                },
 
                 // Step 3: Wait for a rx::Welcome message.
                 InitializeFutureState::WaitWelcome => {
@@ -227,7 +242,10 @@ impl <T> Future for InitializeFuture<T> where T: Transport + 'static {
                             InitializeFutureState::WaitWelcome
                         }
                         Async::Ready(msg) => {
-                            info!("WAMP connection established with session ID {:?}", msg.session);
+                            info!(
+                                "WAMP connection established with session ID {:?}",
+                                msg.session
+                            );
                             let client_state = Arc::new(RwLock::new(ClientState::Established));
 
                             let (sender, receiver) = oneshot::channel();
@@ -256,14 +274,14 @@ impl <T> Future for InitializeFuture<T> where T: Transport + 'static {
 
                                 #[cfg(feature = "subscriber")]
                                 subscriptions: Arc::new(Mutex::new(HashMap::new())),
-                            }))
+                            }));
                         }
                     }
                 }
             };
 
             if pending {
-                return Ok(Async::NotReady)
+                return Ok(Async::NotReady);
             }
         }
     }

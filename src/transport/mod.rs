@@ -1,4 +1,3 @@
-
 //! Contains first-party transport implementations.
 
 /// A websocket-based transport.

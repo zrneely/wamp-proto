@@ -1,4 +1,3 @@
-
 //! A futures-based WAMP client implementation, capable of taking the roles caller, callee,
 //! publisher, and subscriber.
 //!
@@ -37,8 +36,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::{
-    Arc,
     atomic::{AtomicUsize, Ordering},
+    Arc,
 };
 
 use failure::Error;
@@ -49,8 +48,7 @@ use rand::{thread_rng, Rng};
 #[cfg(feature = "ws_transport")]
 use serde::{
     de::{self, Deserialize, Deserializer, Visitor},
-    Serialize,
-    Serializer,
+    Serialize, Serializer,
 };
 
 /// Contains protocol-level details.
@@ -145,7 +143,10 @@ impl<'de> Visitor<'de> for ScopeVisitor {
 impl<Scope> Id<Scope> {
     /// Creates an ID from a raw `u64`. Should not be used except by [`Transport`] implementations.
     pub fn from_raw_value(value: u64) -> Self {
-        Id { value, _pd: PhantomData }
+        Id {
+            value,
+            _pd: PhantomData,
+        }
     }
 }
 impl Id<GlobalScope> {
@@ -355,12 +356,16 @@ pub struct ReceivedValues {
 impl ReceivedValues {
     #[cfg(test)]
     fn len(&self) -> usize {
-        let mut len = self.welcome.lock().len() + self.abort.lock().len() +
-            self.goodbye.lock().len() + self.error.lock().len();
+        let mut len = self.welcome.lock().len()
+            + self.abort.lock().len()
+            + self.goodbye.lock().len()
+            + self.error.lock().len();
 
         #[cfg(feature = "subscriber")]
         {
-            len += self.subscribed.lock().len() + self.unsubscribed.lock().len() + self.event.lock().len();
+            len += self.subscribed.lock().len()
+                + self.unsubscribed.lock().len()
+                + self.event.lock().len();
         }
 
         #[cfg(feature = "publisher")]
@@ -370,7 +375,9 @@ impl ReceivedValues {
 
         #[cfg(feature = "callee")]
         {
-            len += self.registered.lock().len() + self.unregistered.lock().len() + self.invocation.lock().len();
+            len += self.registered.lock().len()
+                + self.unregistered.lock().len()
+                + self.invocation.lock().len();
         }
 
         #[cfg(feature = "caller")]
@@ -443,13 +450,43 @@ mod tests {
     #[cfg(feature = "ws_transport")]
     #[test]
     fn id_deserialization_test() {
-        assert_eq!(12345, serde_json::from_value::<Id<SessionScope>>(json!(12345)).unwrap().value);
-        assert_eq!(12345, serde_json::from_value::<Id<RouterScope>>(json!(12345)).unwrap().value);
-        assert_eq!(12345, serde_json::from_value::<Id<GlobalScope>>(json!(12345)).unwrap().value);
+        assert_eq!(
+            12345,
+            serde_json::from_value::<Id<SessionScope>>(json!(12345))
+                .unwrap()
+                .value
+        );
+        assert_eq!(
+            12345,
+            serde_json::from_value::<Id<RouterScope>>(json!(12345))
+                .unwrap()
+                .value
+        );
+        assert_eq!(
+            12345,
+            serde_json::from_value::<Id<GlobalScope>>(json!(12345))
+                .unwrap()
+                .value
+        );
 
-        assert_eq!(MAX_ID_VAL, serde_json::from_value::<Id<SessionScope>>(json!(MAX_ID_VAL)).unwrap().value);
-        assert_eq!(MAX_ID_VAL, serde_json::from_value::<Id<RouterScope>>(json!(MAX_ID_VAL)).unwrap().value);
-        assert_eq!(MAX_ID_VAL, serde_json::from_value::<Id<GlobalScope>>(json!(MAX_ID_VAL)).unwrap().value);
+        assert_eq!(
+            MAX_ID_VAL,
+            serde_json::from_value::<Id<SessionScope>>(json!(MAX_ID_VAL))
+                .unwrap()
+                .value
+        );
+        assert_eq!(
+            MAX_ID_VAL,
+            serde_json::from_value::<Id<RouterScope>>(json!(MAX_ID_VAL))
+                .unwrap()
+                .value
+        );
+        assert_eq!(
+            MAX_ID_VAL,
+            serde_json::from_value::<Id<GlobalScope>>(json!(MAX_ID_VAL))
+                .unwrap()
+                .value
+        );
 
         assert!(serde_json::from_value::<Id<SessionScope>>(json!(MAX_ID_VAL + 1)).is_err());
         assert!(serde_json::from_value::<Id<RouterScope>>(json!(MAX_ID_VAL + 1)).is_err());
@@ -487,7 +524,10 @@ mod tests {
         assert_eq!(None, tv.clone().into_bool());
         assert_eq!(None, tv.clone().into_dict());
         assert_eq!(None, tv.clone().into_int());
-        assert_eq!(Some(vec![TransportableValue::Integer(12345)]), tv.clone().into_list());
+        assert_eq!(
+            Some(vec![TransportableValue::Integer(12345)]),
+            tv.clone().into_list()
+        );
         assert_eq!(None, tv.clone().into_string());
 
         let tv = TransportableValue::String("asdf".into());
@@ -511,7 +551,10 @@ mod tests {
     #[test]
     fn uri_deserialization_test() {
         let value = json!("a.b.c.d");
-        assert_eq!(Uri::raw("a.b.c.d".into()), serde_json::from_value(value).unwrap());
+        assert_eq!(
+            Uri::raw("a.b.c.d".into()),
+            serde_json::from_value(value).unwrap()
+        );
 
         let value = json!(["a", 1]);
         assert!(serde_json::from_value::<Uri>(value).is_err());

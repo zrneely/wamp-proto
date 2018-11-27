@@ -1,4 +1,3 @@
-
 use std::fmt;
 
 use regex::Regex;
@@ -17,7 +16,10 @@ pub mod known_uri {
     /// URIs defined in section 11.1.2, which deal with receiving invalid URIs.
     pub mod interaction {
         w_uri!("Used when a peer provides an invalid URI.", invalid_uri);
-        w_uri!("Used when an RPC is invoked which doesn't exist.", no_such_procedure);
+        w_uri!(
+            "Used when an RPC is invoked which doesn't exist.",
+            no_such_procedure
+        );
         w_uri!(
             "Used when a callee tries to register an RPC which is already registered.",
             procedure_already_exists
@@ -31,23 +33,50 @@ pub mod known_uri {
              subscribed to.",
             no_such_subscription
         );
-        w_uri!("A caller invoked an RPC with arguments that are invalid.", invalid_argument);
+        w_uri!(
+            "A caller invoked an RPC with arguments that are invalid.",
+            invalid_argument
+        );
     }
 
     /// URIs defined in section 11.1.3, which deal with closing sessions.
     pub mod session_close {
-        w_uri!("The connected peer is shutting down entirely.", system_shutdown);
-        w_uri!("The connected peer wants to leave the realm it's connected to.", close_realm);
-        w_uri!("The connected peer is acknowledging a GOODBYE message.", goodbye_and_out);
-        w_uri!("The connected peer received an invalid protocol message.", protocol_violation);
+        w_uri!(
+            "The connected peer is shutting down entirely.",
+            system_shutdown
+        );
+        w_uri!(
+            "The connected peer wants to leave the realm it's connected to.",
+            close_realm
+        );
+        w_uri!(
+            "The connected peer is acknowledging a GOODBYE message.",
+            goodbye_and_out
+        );
+        w_uri!(
+            "The connected peer received an invalid protocol message.",
+            protocol_violation
+        );
     }
 
     /// URIs defined in section 11.1.4, which deal with authorization.
     pub mod authorization {
-        w_uri!("Some action failed because the peer is not authorized.", not_authorized);
-        w_uri!("An attempt to determine if the peer is authorized failed.", authorization_failed);
-        w_uri!("The connected peer wanted to join a non-existant realm.", no_such_realm);
-        w_uri!("A peer tried to authenticate with a role that does not exist.", no_such_role);
+        w_uri!(
+            "Some action failed because the peer is not authorized.",
+            not_authorized
+        );
+        w_uri!(
+            "An attempt to determine if the peer is authorized failed.",
+            authorization_failed
+        );
+        w_uri!(
+            "The connected peer wanted to join a non-existant realm.",
+            no_such_realm
+        );
+        w_uri!(
+            "A peer tried to authenticate with a role that does not exist.",
+            no_such_role
+        );
     }
 }
 

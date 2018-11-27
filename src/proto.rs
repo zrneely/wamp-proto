@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 
 use {GlobalScope, Id, RouterScope, SessionScope, TransportableValue, Uri};
@@ -37,7 +36,6 @@ type List = Vec<TransportableValue>;
 /// [the WAMP protocol specification]: http://wamp-proto.org/spec/
 #[derive(Debug)]
 pub enum TxMessage {
-
     /// Session management; used by all types of peers.
     Hello {
         /// The realm to connect to.
@@ -164,7 +162,7 @@ impl TxMessage {
         match self {
             Hello { .. } => msg_code::HELLO,
             Goodbye { .. } => msg_code::GOODBYE,
-            Error { .. }  => msg_code::ERROR,
+            Error { .. } => msg_code::ERROR,
 
             #[cfg(feature = "publisher")]
             Publish { .. } => msg_code::PUBLISH,
@@ -197,28 +195,37 @@ impl TxMessage {
 
         let code = self.get_message_code();
         match self {
-            Hello { ref realm, ref details } => json!([
-                code, realm, details,
-            ]),
+            Hello {
+                ref realm,
+                ref details,
+            } => json!([code, realm, details]),
 
-            Goodbye { ref details, ref reason } => json!([
-                code, details, reason,
-            ]),
+            Goodbye {
+                ref details,
+                ref reason,
+            } => json!([code, details, reason]),
 
-            Error { ref request_type, ref request, ref details, ref error,
-                    ref arguments, ref arguments_kw } => {
-
+            Error {
+                ref request_type,
+                ref request,
+                ref details,
+                ref error,
+                ref arguments,
+                ref arguments_kw,
+            } => {
                 if let Some(ref arguments) = arguments {
                     if let Some(ref arguments_kw) = arguments_kw {
                         json!([
-                            code, request_type, request, details, error,
-                            arguments, arguments_kw,
+                            code,
+                            request_type,
+                            request,
+                            details,
+                            error,
+                            arguments,
+                            arguments_kw,
                         ])
                     } else {
-                        json!([
-                            code, request_type, request, details, error,
-                            arguments,
-                        ])
+                        json!([code, request_type, request, details, error, arguments])
                     }
                 } else {
                     json!([code, request_type, request, details, error])
@@ -226,18 +233,18 @@ impl TxMessage {
             }
 
             #[cfg(feature = "publisher")]
-            Publish { ref request, ref options, ref topic,
-                      ref arguments, ref arguments_kw } => {
-
+            Publish {
+                ref request,
+                ref options,
+                ref topic,
+                ref arguments,
+                ref arguments_kw,
+            } => {
                 if let Some(ref arguments) = arguments {
                     if let Some(ref arguments_kw) = arguments_kw {
-                        json!([
-                            code, request, options, topic, arguments, arguments_kw,
-                        ])
+                        json!([code, request, options, topic, arguments, arguments_kw])
                     } else {
-                        json!([
-                            code, request, options, topic, arguments,
-                        ])
+                        json!([code, request, options, topic, arguments])
                     }
                 } else {
                     json!([code, request, options, topic])
@@ -245,27 +252,31 @@ impl TxMessage {
             }
 
             #[cfg(feature = "subscriber")]
-            Subscribe { ref request, ref options, ref topic } => json!([
-                code, request, options, topic,
-            ]),
+            Subscribe {
+                ref request,
+                ref options,
+                ref topic,
+            } => json!([code, request, options, topic]),
 
             #[cfg(feature = "subscriber")]
-            Unsubscribe { ref request, ref subscription } => json!([
-                code, request, subscription,
-            ]),
+            Unsubscribe {
+                ref request,
+                ref subscription,
+            } => json!([code, request, subscription]),
 
             #[cfg(feature = "caller")]
-            Call { ref request, ref options, ref procedure,
-                   ref arguments, ref arguments_kw} => {
+            Call {
+                ref request,
+                ref options,
+                ref procedure,
+                ref arguments,
+                ref arguments_kw,
+            } => {
                 if let Some(ref arguments) = arguments {
                     if let Some(ref arguments_kw) = arguments_kw {
-                        json!([
-                            code, request, options, procedure, arguments, arguments_kw,
-                        ])
+                        json!([code, request, options, procedure, arguments, arguments_kw])
                     } else {
-                        json!([
-                            code, request, options, procedure, arguments,
-                        ])
+                        json!([code, request, options, procedure, arguments])
                     }
                 } else {
                     json!([code, request, options, procedure])
@@ -273,17 +284,25 @@ impl TxMessage {
             }
 
             #[cfg(feature = "callee")]
-            Register { ref request, ref options, ref procedure } => json!([
-                code, request, options, procedure
-            ]),
+            Register {
+                ref request,
+                ref options,
+                ref procedure,
+            } => json!([code, request, options, procedure]),
 
             #[cfg(feature = "callee")]
-            Unregister { ref request, ref registration } => json!([
-                code, request, registration
-            ]),
+            Unregister {
+                ref request,
+                ref registration,
+            } => json!([code, request, registration]),
 
             #[cfg(feature = "callee")]
-            Yield { ref request, ref options, ref arguments, ref arguments_kw } => {
+            Yield {
+                ref request,
+                ref options,
+                ref arguments,
+                ref arguments_kw,
+            } => {
                 if let Some(ref arguments) = arguments {
                     if let Some(ref arguments_kw) = arguments_kw {
                         json!([code, request, options, arguments, arguments_kw])
