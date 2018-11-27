@@ -10,7 +10,7 @@ pub mod known_uri {
     macro_rules! w_uri {
         ($doc:expr, $name:ident) => {
             #[doc=$doc]
-            pub const $name: &'static str = concat!("wamp.error.", stringify!($text));
+            pub const $name: &'static str = concat!("wamp.error.", stringify!($name));
         };
     }
 

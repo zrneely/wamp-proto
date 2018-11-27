@@ -103,7 +103,7 @@ pub struct Client<T: Transport> {
     shutdown_timeout_duration: Duration,
     router_capabilities: RouterCapabilities,
 
-    // TODO: all operations should check the state before accepting incoming messages
+    // All operations should check the state before accepting incoming messages
     state: Arc<RwLock<ClientState>>,
     #[cfg(feature = "subscriber")]
     subscriptions: Arc<Mutex<HashMap<Id<RouterScope>, subscribe::Subscription>>>,

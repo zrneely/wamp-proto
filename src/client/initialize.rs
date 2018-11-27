@@ -18,6 +18,7 @@ enum ProtocolMessageListenerState {
     Ready,
     StartReplyGoodbye,
     SendGoodbye,
+    StopAllTasks,
 }
 
 // Used to listen for ABORT and GOODBYE messages from the router.
@@ -55,29 +56,30 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                         Async::Ready(msg) => {
                             warn!("Received ABORT from router: \"{:?}\" ({:?})", msg.reason, msg.details);
                             *self.client_state.write() = ClientState::Closed;
-                            return Ok(Async::Ready(()))
+                            ProtocolMessageListenerState::StopAllTasks
                         }
-                        Async::NotReady => {},
-                    };
 
-                    // Poll for GOODBYE
-                    match self.values.abort.lock().poll_take(|_| true) {
-                        Async::Ready(msg) => {
-                            info!("Received GOODBYE from router: \"{:?}\" ({:?})", msg.reason, msg.details);
-                            *self.client_state.write() = ClientState::Closing;
-                            ProtocolMessageListenerState::StartReplyGoodbye
-                        }
-                        Async::NotReady => {
-                            pending = true;
-                            ProtocolMessageListenerState::Ready
+                        // Poll for GOODBYE
+                        Async::NotReady => match self.values.goodbye.lock().poll_take(|_| true) {
+                            Async::Ready(msg) => {
+                                info!("Received GOODBYE from router: \"{:?}\" ({:?})", msg.reason, msg.details);
+                                *self.client_state.write() = ClientState::Closing;
+                                ProtocolMessageListenerState::StartReplyGoodbye
+                            }
+                            Async::NotReady => {
+                                pending = true;
+                                ProtocolMessageListenerState::Ready
+                            }
                         }
                     }
                 }
+
                 ProtocolMessageListenerState::StartReplyGoodbye => {
                     let message = TxMessage::Goodbye {
                         details: HashMap::new(),
                         reason: Uri::raw(known_uri::session_close::goodbye_and_out.to_string()),
                     };
+                    debug!("ProtocolMessageListenerState sending GOODBYE response: {:?}", message);
                     match self.sender.lock().start_send(message) {
                         Ok(AsyncSink::NotReady(_)) => {
                             pending = true;
@@ -85,10 +87,7 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                         }
                         Ok(AsyncSink::Ready) => ProtocolMessageListenerState::SendGoodbye,
                         Err(e) => {
-                            error!(
-                                "ProtocolMessageListener got err {:?} while initiating GOODBYE response!",
-                                e
-                            );
+                            error!("ProtocolMessageListener got err {:?} while initiating GOODBYE response!", e);
                             return Err(())
                         }
                     }
@@ -99,15 +98,20 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                             pending = true;
                             ProtocolMessageListenerState::SendGoodbye
                         }
-                        Ok(Async::Ready(_)) => return Ok(Async::Ready(())),
+                        Ok(Async::Ready(_)) => ProtocolMessageListenerState::StopAllTasks,
                         Err(e) => {
-                            error!(
-                                "ProtocolMessageListener got err {:?} while flushing GOODBYE response!",
-                                e
-                            );
+                            error!("ProtocolMessageListener got err {:?} while flushing GOODBYE response!", e);
                             return Err(())
                         }
                     }
+                }
+
+                ProtocolMessageListenerState::StopAllTasks => {
+                    info!("ProtocolMessageListener stopping all tasks!");
+                    // TODO: somehow stop all tasks. Do we just have to store stop signal Senders
+                    // for everything here? They are Send + Sync so that's possible. It would be more
+                    // convenient for all the tasks to live in one "ClientTaskTracker" struct or something.
+                    return Ok(Async::Ready(()))
                 }
             };
 
