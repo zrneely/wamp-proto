@@ -250,7 +250,7 @@ impl TransportableValue {
 /// It is not the responsibility of the transport to associate meaning with any received messages.
 /// For example, a transport should *not* close itself upon receiving an ABORT message. It should also
 /// *not* look for or even be aware of out-of-order messages.
-pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> {
+pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> + Send {
     /// The type of future returned when this transport opens a connection.
     type ConnectFuture: Future<Item = Self, Error = Error> + Send;
 

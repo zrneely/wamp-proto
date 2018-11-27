@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use failure::Error;
-use futures::{Async, AsyncSink, Future};
+use futures::{Async, AsyncSink, Future, sync::oneshot};
 use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
@@ -13,13 +13,51 @@ use client::{Client, ClientState, RouterCapabilities};
 use proto::TxMessage;
 
 #[derive(Debug)]
+enum ProtocolMessageListenerState {
+    Ready,
+    StartReplyGoodbye,
+    SendGoodbye,
+}
+
+// Used to listen for ABORT and GOODBYE messages from the router.
+struct ProtocolMessageListener<T: Transport> {
+    sender: Arc<Mutex<T>>,
+    values: ReceivedValues,
+    client_state: Arc<RwLock<ClientState>>,
+
+    stop_receiver: oneshot::Receiver<()>,
+}
+impl<T: Transport> Future for ProtocolMessageListener<T> {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+        trace!("ProtocolMessageListener wakeup");
+        loop {
+            match self.stop_receiver.poll() {
+                // We haven't been told to stop
+                Ok(Async::NotReady) => {},
+                // Either we've been told to stop or the sender was dropped,
+                // in which case we should stop anyway.
+                Ok(Async::Ready(_)) | Err(_) => {
+                    debug!("ProtocolMessageListener told to stop!");
+                    return Ok(Async::Ready(()));
+                }
+            }
+
+            // TODO: listen for GOODBYE or ABORT messages (ERROR?)
+        }
+    }
+}
+
+#[derive(Debug)]
 enum InitializeFutureState {
     StartSendHello(Option<TxMessage>),
     SendHello,
     WaitWelcome,
 }
 
-pub(super) struct InitializeFuture<T: Transport> {
+pub(super) struct InitializeFuture<T: Transport + 'static> {
     state: InitializeFutureState,
     timeout: Delay,
 
@@ -31,7 +69,7 @@ pub(super) struct InitializeFuture<T: Transport> {
     sender: Arc<Mutex<T>>,
     received: ReceivedValues,
 }
-impl <T> InitializeFuture<T> where T: Transport {
+impl <T> InitializeFuture<T> where T: Transport + 'static {
     pub(crate) fn new(
         mut sender: T,
         received: ReceivedValues,
@@ -75,7 +113,7 @@ impl <T> InitializeFuture<T> where T: Transport {
         }
     }
 }
-impl <T> Future for InitializeFuture<T> where T: Transport {
+impl <T> Future for InitializeFuture<T> where T: Transport + 'static {
     type Item = Client<T>;
     type Error = Error;
 
@@ -117,13 +155,22 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
                             InitializeFutureState::WaitWelcome
                         }
                         Async::Ready(msg) => {
-                            info!("WAMP connection initialized with session ID {:?}", msg.session);
+                            info!("WAMP connection established with session ID {:?}", msg.session);
+                            let client_state = Arc::new(RwLock::new(ClientState::Established));
 
-                            // TODO: spawn a task that listens for ABORT, GOODBYE, etc.
+                            let (sender, receiver) = oneshot::channel();
+                            let proto_msg_listener = ProtocolMessageListener {
+                                sender: self.sender.clone(),
+                                values: self.received.clone(),
+                                client_state: client_state.clone(),
+                                stop_receiver: receiver,
+                            };
+                            tokio::spawn(proto_msg_listener);
 
                             return Ok(Async::Ready(Client {
                                 sender: self.sender.clone(),
                                 received: self.received.clone(),
+                                proto_msg_stop_sender: Some(sender),
 
                                 session_id: msg.session,
                                 timeout_duration: self.timeout_duration,
@@ -132,7 +179,7 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
                                 router_capabilities: RouterCapabilities::from_details(&msg.details),
 
                                 // We've already sent our "hello" and received our "welcome".
-                                state: Arc::new(RwLock::new(ClientState::Established)),
+                                state: client_state,
 
                                 #[cfg(feature = "subscriber")]
                                 subscriptions: Arc::new(Mutex::new(HashMap::new())),

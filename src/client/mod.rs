@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use failure::Error;
-use futures::{Async, future::{self, Either, Future}};
+use futures::{Async, future::{self, Either, Future}, sync::oneshot};
 use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
@@ -96,13 +96,14 @@ impl<'a> ClientConfig<'a> {
 pub struct Client<T: Transport> {
     sender: Arc<Mutex<T>>,
     received: ReceivedValues,
-    // TODO: store a oneshot::Sender<()> that tells the ProtocolMessageListener to stop
+    proto_msg_stop_sender: Option<oneshot::Sender<()>>,
 
     session_id: Id<GlobalScope>,
     timeout_duration: Duration,
     shutdown_timeout_duration: Duration,
     router_capabilities: RouterCapabilities,
 
+    // TODO: all operations should check the state before accepting incoming messages
     state: Arc<RwLock<ClientState>>,
     #[cfg(feature = "subscriber")]
     subscriptions: Arc<Mutex<HashMap<Id<RouterScope>, subscribe::Subscription>>>,
@@ -114,7 +115,8 @@ impl<T: Transport> std::fmt::Debug for Client<T> {
         write!(
             f,
             "Client {{\n\treceived: {:?}\n\tsession_id: {:?}\n\ttimeout_duration: {:?}\n\trouter_capabilities: {:?}\n}}",
-            self.received, self.session_id, self.timeout_duration, self.router_capabilities)
+            self.received, self.session_id, self.timeout_duration, self.router_capabilities
+        )
     }
 }
 impl <T: Transport> Client<T> {
@@ -249,6 +251,10 @@ impl <T: Transport> Client<T> {
                 return Either::A(future::err(WampError::InvalidClientState.into()))
             } else {
                 *state_lock = ClientState::ShuttingDown;
+
+                if let Some(sender) = self.proto_msg_stop_sender.take() {
+                    let _ = sender.send(());
+                }
             }
         }
         
@@ -257,8 +263,9 @@ impl <T: Transport> Client<T> {
 }
 impl<T: Transport> Drop for Client<T> {
     fn drop(&mut self) {
-        if *self.state.read() != ClientState::Closed {
-            error!("Client was not closed before being dropped!");
+        let state = self.state.read();
+        if *state != ClientState::Closed {
+            error!("Client was not closed before being dropped (actual state: {:?})!", *state);
 
             if self.panic_on_drop_while_open {
                 panic!("Client was not closed before being dropped!");
