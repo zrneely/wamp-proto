@@ -1,45 +1,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use std::{cmp, fmt, hash};
 
 use failure::Error;
 use futures::{sync::oneshot, Async, AsyncSink, Future};
 use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
-use client::{BroadcastHandler, Client, ClientState};
+use client::{BroadcastHandler, Client, ClientState, ClientTaskTracker};
 use error::WampError;
 use proto::TxMessage;
 use {Id, ReceivedValues, RouterScope, SessionScope, Transport, Uri};
-
-/// The result of subscribing to a channel.
-pub(super) struct Subscription {
-    // The ID of the subscription, chosen by the router.
-    subscription_id: Id<RouterScope>,
-    /// A handle to tell the associated task to stop listening.
-    pub listener_stop_sender: oneshot::Sender<()>,
-}
-impl fmt::Debug for Subscription {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "Subscription {{ subscription_id: {:?} }}",
-            self.subscription_id
-        )
-    }
-}
-impl cmp::PartialEq for Subscription {
-    fn eq(&self, other: &Self) -> bool {
-        self.subscription_id == other.subscription_id
-    }
-}
-impl cmp::Eq for Subscription {}
-impl hash::Hash for Subscription {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.subscription_id.hash(state);
-    }
-}
 
 // The future (task) that listens for new events published to a channel we're
 // subscribed to.
@@ -108,8 +79,8 @@ pub(super) struct SubscriptionFuture<T: Transport> {
 
     sender: Arc<Mutex<T>>,
     received: ReceivedValues,
-    subscriptions: Arc<Mutex<HashMap<Id<RouterScope>, Subscription>>>,
     client_state: Arc<RwLock<ClientState>>,
+    task_tracker: Arc<ClientTaskTracker>,
 }
 impl<T: Transport> SubscriptionFuture<T> {
     pub(super) fn new(client: &mut Client<T>, topic: Uri, handler: BroadcastHandler) -> Self {
@@ -128,8 +99,8 @@ impl<T: Transport> SubscriptionFuture<T> {
 
             sender: client.sender.clone(),
             received: client.received.clone(),
-            subscriptions: client.subscriptions.clone(),
             client_state: client.state.clone(),
+            task_tracker: client.task_tracker.clone(),
         }
     }
 }
@@ -208,14 +179,7 @@ impl<T: Transport> Future for SubscriptionFuture<T> {
                             "Subscribed to {:?} (ID: {:?})",
                             self.topic, msg.subscription
                         );
-                        self.subscriptions.lock().insert(
-                            msg.subscription,
-                            Subscription {
-                                subscription_id: msg.subscription,
-                                listener_stop_sender: sender,
-                            },
-                        );
-
+                        self.task_tracker.track_subscription(msg.subscription, sender);
                         return Ok(Async::Ready(msg.subscription));
                     }
                 },

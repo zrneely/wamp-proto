@@ -7,7 +7,7 @@ use futures::{sync::oneshot, Async, AsyncSink, Future};
 use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
-use client::{Client, ClientState, RouterCapabilities};
+use client::{Client, ClientState, ClientTaskTracker, RouterCapabilities};
 use proto::TxMessage;
 use uri::{known_uri, Uri};
 use {ReceivedValues, Transport, TransportableValue as TV};
@@ -25,6 +25,7 @@ struct ProtocolMessageListener<T: Transport> {
     sender: Arc<Mutex<T>>,
     values: ReceivedValues,
     client_state: Arc<RwLock<ClientState>>,
+    task_tracker: Arc<ClientTaskTracker>,
 
     state: ProtocolMessageListenerState,
     stop_receiver: oneshot::Receiver<()>,
@@ -61,7 +62,9 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                             ProtocolMessageListenerState::StopAllTasks
                         }
 
-                        // Poll for GOODBYE
+                        // Poll for GOODBYE - TODO don't do this when in ShuttingDown state (user-initiated close)
+                        // to avoid accidentally eating the response GOODBYE message. Or filter on the reason not being
+                        // goodbye_and_out?
                         Async::NotReady => match self.values.goodbye.lock().poll_take(|_| true) {
                             Async::Ready(msg) => {
                                 info!(
@@ -116,9 +119,7 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
 
                 ProtocolMessageListenerState::StopAllTasks => {
                     info!("ProtocolMessageListener stopping all tasks!");
-                    // TODO: somehow stop all tasks. Do we just have to store stop signal Senders
-                    // for everything here? They are Send + Sync so that's possible. It would be more
-                    // convenient for all the tasks to live in one "ClientTaskTracker" struct or something.
+                    self.task_tracker.stop_all();
                     return Ok(Async::Ready(()));
                 }
             };
@@ -246,13 +247,16 @@ where
                                 "WAMP connection established with session ID {:?}",
                                 msg.session
                             );
-                            let client_state = Arc::new(RwLock::new(ClientState::Established));
 
                             let (sender, receiver) = oneshot::channel();
+                            let task_tracker = ClientTaskTracker::new(sender);
+                            let client_state = Arc::new(RwLock::new(ClientState::Established));
+
                             let proto_msg_listener = ProtocolMessageListener {
                                 sender: self.sender.clone(),
                                 values: self.received.clone(),
                                 client_state: client_state.clone(),
+                                task_tracker: task_tracker.clone(),
                                 state: ProtocolMessageListenerState::Ready,
                                 stop_receiver: receiver,
                             };
@@ -261,7 +265,6 @@ where
                             return Ok(Async::Ready(Client {
                                 sender: self.sender.clone(),
                                 received: self.received.clone(),
-                                proto_msg_stop_sender: Some(sender),
 
                                 session_id: msg.session,
                                 timeout_duration: self.timeout_duration,
@@ -271,9 +274,7 @@ where
 
                                 // We've already sent our "hello" and received our "welcome".
                                 state: client_state,
-
-                                #[cfg(feature = "subscriber")]
-                                subscriptions: Arc::new(Mutex::new(HashMap::new())),
+                                task_tracker,
                             }));
                         }
                     }

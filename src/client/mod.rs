@@ -62,6 +62,60 @@ enum ClientState {
     Closing,
 }
 
+type StopSender = oneshot::Sender<()>;
+// Tracks all of the tasks owned by a client. This is Send + Sync because StopSender is
+// Send + Sync. Mutex<T> is Send + Sync as long as T is Send. HashMap<K, V> is Send as long
+// as K and V are both Send.
+struct ClientTaskTracker {
+    proto_msg_stop_sender: Mutex<Option<StopSender>>,
+
+    #[cfg(feature = "subscriber")]
+    subscriptions: Mutex<HashMap<Id<RouterScope>, StopSender>>,
+}
+impl ClientTaskTracker {
+    fn new(proto_msg_stop_sender: StopSender) -> Arc<Self> {
+        Arc::new(ClientTaskTracker {
+            proto_msg_stop_sender: Mutex::new(Some(proto_msg_stop_sender)),
+
+            #[cfg(feature = "subscriber")]
+            subscriptions: Mutex::new(HashMap::new()),
+        })
+    }
+
+    fn stop_proto_msg_listener(&self) {
+        if let Some(sender) = self.proto_msg_stop_sender.lock().take() {
+            let _ = sender.send(());
+        }
+    }
+
+    #[cfg(feature = "subscriber")]
+    fn track_subscription(&self, id: Id<RouterScope>, sender: StopSender) {
+        let mut subs = self.subscriptions.lock();
+        subs.insert(id, sender);
+    }
+
+    #[cfg(feature = "subscriber")]
+    fn stop_all_subscriptions(&self) {
+        let mut subs = self.subscriptions.lock();
+        for (_, mut sender) in subs.drain() {
+            let _ = sender.send(());
+        }
+    }
+
+    #[cfg(feature = "subscriber")]
+    fn stop_subscription(&self, id: &Id<RouterScope>) {
+        let mut subs = self.subscriptions.lock();
+        if let Some(sender) = subs.remove(id) {
+            let _ = sender.send(());
+        }
+    }
+
+    fn stop_all_except_proto_msg(&self) {
+        #[cfg(feature = "subscriber")]
+        self.stop_all_subscriptions();
+    }
+}
+
 /// Configuration options for a new client.
 pub struct ClientConfig<'a> {
     /// The URL to connect to.
@@ -103,7 +157,6 @@ impl<'a> ClientConfig<'a> {
 pub struct Client<T: Transport> {
     sender: Arc<Mutex<T>>,
     received: ReceivedValues,
-    proto_msg_stop_sender: Option<oneshot::Sender<()>>,
 
     session_id: Id<GlobalScope>,
     timeout_duration: Duration,
@@ -112,8 +165,7 @@ pub struct Client<T: Transport> {
 
     // All operations should check the state before accepting incoming messages
     state: Arc<RwLock<ClientState>>,
-    #[cfg(feature = "subscriber")]
-    subscriptions: Arc<Mutex<HashMap<Id<RouterScope>, subscribe::Subscription>>>,
+    task_tracker: Arc<ClientTaskTracker>,
 
     panic_on_drop_while_open: bool,
 }
@@ -271,35 +323,32 @@ impl<T: Transport> Client<T> {
                 return Either::A(future::err(WampError::InvalidClientState.into()));
             } else {
                 *state_lock = ClientState::ShuttingDown;
-
-                #[cfg(feature = "subscriber")]
-                self.close_all_subscriptions();
-
-                if let Some(sender) = self.proto_msg_stop_sender.take() {
-                    let _ = sender.send(());
-                }
+                // Stop listening for incoming events and RPC invocations
+                self.task_tracker.stop_all_except_proto_msg();
             }
         }
 
         let sender = self.sender.clone();
+        let task_tracker = self.task_tracker.clone();
         Either::B(close::CloseFuture::new(self, reason).and_then(move |_| {
+            // We've entered the Closed state now that CloseFuture is resolved.
+            // Stop listening for incoming ABORT and GOODBYE messages and begin
+            // closing the transport.
+            task_tracker.stop_proto_msg_listener();
+
             let mut lock = sender.lock();
             Transport::close(&mut *lock)
+            // TODO: and_then again to set state to some "TransportClosed" state that the drop
+            // handler checks for instead of "Closed"?
         }))
-    }
-
-    // Terminates all tasks associated with our active subscriptions. Does NOT send
-    // UNSUBSCRIBE messages.
-    #[cfg(feature = "subscriber")]
-    fn close_all_subscriptions(&self) {
-        let mut subs = self.subscriptions.lock();
-        for (_, mut subscription) in subs.drain() {
-            let _ = subscription.listener_stop_sender.send(());
-        }
     }
 }
 impl<T: Transport> Drop for Client<T> {
     fn drop(&mut self) {
+        // Make a best-effort attempt to stop everything.
+        self.task_tracker.stop_all_except_proto_msg();
+        self.task_tracker.stop_proto_msg_listener();
+
         let state = self.state.read();
         if *state != ClientState::Closed {
             error!(
