@@ -132,6 +132,7 @@ impl Future for WebsocketTransportListener {
 }
 impl WebsocketTransportListener {
     fn poll_impl(&mut self) -> Result<Async<()>, Error> {
+        trace!("WebsocketTransportListener wakeup");
         loop {
             match self.stop_receiver.poll() {
                 // we haven't been told to stop

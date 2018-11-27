@@ -82,7 +82,7 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         loop {
             trace!("InitializeFuture: {:?}", self.state);
-            super::check_for_timeout_or_error(&mut self.timeout, &mut self.received)?;
+            super::check_for_timeout(&mut self.timeout)?;
 
             let mut pending = false;
             self.state = match self.state {
@@ -118,6 +118,9 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
                         }
                         Async::Ready(msg) => {
                             info!("WAMP connection initialized with session ID {:?}", msg.session);
+
+                            // TODO: spawn a task that listens for ABORT, GOODBYE, etc.
+
                             return Ok(Async::Ready(Client {
                                 sender: self.sender.clone(),
                                 received: self.received.clone(),
@@ -131,6 +134,7 @@ impl <T> Future for InitializeFuture<T> where T: Transport {
                                 // We've already sent our "hello" and received our "welcome".
                                 state: Arc::new(RwLock::new(ClientState::Established)),
 
+                                #[cfg(feature = "subscriber")]
                                 subscriptions: Arc::new(Mutex::new(HashMap::new())),
                             }))
                         }

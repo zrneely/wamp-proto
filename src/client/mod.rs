@@ -8,10 +8,7 @@ use futures::{Async, future::{self, Either, Future}};
 use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
-use {
-    ConnectResult, Id, GlobalScope, ReceivedValues, RouterScope, Uri, TransportableValue as TV, Transport,
-    known_uri
-};
+use {ConnectResult, Id, GlobalScope, ReceivedValues, RouterScope, Uri, TransportableValue as TV, Transport};
 use error::WampError;
 
 mod initialize;
@@ -20,20 +17,15 @@ mod close;
 #[cfg(feature = "subscriber")]
 mod subscribe;
 
-#[cfg(feature = "subscriber")]
-pub use self::subscribe::Subscription;
-
-fn check_for_timeout_or_error(
-    timeout: &mut Delay,
-    received_vals: &mut ReceivedValues
-) -> Result<(), Error> {
+// helper for most operations
+fn check_for_timeout(timeout: &mut Delay) -> Result<(), Error> {
     match timeout.poll()? {
-        Async::Ready(_) => return Err(WampError::Timeout.into()),
+        Async::Ready(_) => {
+            info!("Timeout detected!");
+            return Err(WampError::Timeout.into())
+        },
         _ => {}
     };
-
-    // TODO: check for all errors specified by WAMP
-
     Ok(())
 }
 
@@ -104,6 +96,7 @@ impl<'a> ClientConfig<'a> {
 pub struct Client<T: Transport> {
     sender: Arc<Mutex<T>>,
     received: ReceivedValues,
+    // TODO: store a oneshot::Sender<()> that tells the ProtocolMessageListener to stop
 
     session_id: Id<GlobalScope>,
     timeout_duration: Duration,
@@ -111,9 +104,8 @@ pub struct Client<T: Transport> {
     router_capabilities: RouterCapabilities,
 
     state: Arc<RwLock<ClientState>>,
-
     #[cfg(feature = "subscriber")]
-    subscriptions: Arc<Mutex<HashMap<Subscription, BroadcastHandler>>>,
+    subscriptions: Arc<Mutex<HashMap<Id<RouterScope>, subscribe::Subscription>>>,
 
     panic_on_drop_while_open: bool,
 }
@@ -209,20 +201,30 @@ impl <T: Transport> Client<T> {
     ///
     /// # Return Value
     ///
-    /// This method returns [`Ok`] if the router supports the "broker" role, and [`Err`] if it
-    /// doesn't. The future will return a successful result if subscription was successful, and an
-    /// error one if a timeout occurred or some other failure happened.
+    /// This method returns a future which will resolve to success once the subscription is
+    /// acknowledged by the router. The value returned from the future is the subscription ID,
+    /// which can be given to [`unsubscribe`] to cancel the subscription.
+    /// 
+    /// # Failure Modes
+    /// 
+    /// * If the client is closed (either because of a local or remote closure), the returned future
+    /// will immediately resolve with an error.
+    /// 
+    /// * If the router does not support the "broker" role, the returned future will immediately resolve
+    /// with an error.
+    /// 
+    /// * If the router does not acknowledge the subscription within the client timeout period, the returned
+    /// future will resolve with an error.
     #[cfg(feature = "subscriber")]
-    pub fn subscribe<F>(&mut self, topic: Uri, handler: F) ->
-        Result<impl Future<Item = Subscription, Error = Error>, Error>
+    pub fn subscribe<F>(&mut self, topic: Uri, handler: F) -> impl Future<Item = Id<RouterScope>, Error = Error>
         where F: 'static + (Fn(Broadcast) -> Box<Future<Item = (), Error = Error>>) + Send {
 
         if *self.state.read() != ClientState::Established {
-            Err(WampError::InvalidClientState.into())
+            Either::A(future::err(WampError::InvalidClientState.into()))
         } else if !self.router_capabilities.broker {
-            Err(WampError::RouterSupportMissing.into())
+            Either::A(future::err(WampError::RouterSupportMissing.into()))
         } else {
-            Ok(subscribe::SubscriptionFuture::new(
+            Either::B(subscribe::SubscriptionFuture::new(
                 self,
                 topic,
                 BroadcastHandler { target: Box::new(handler) }
@@ -241,12 +243,16 @@ impl <T: Transport> Client<T> {
     /// and resolves with an error otherwise. After this is called, all incoming messages except
     /// acknowledgement of our disconnection is ignored.
     pub fn close(&mut self, reason: Uri) -> impl Future<Item = (), Error = Error> {
-        if *self.state.read() != ClientState::Established {
-            Either::A(future::err(WampError::InvalidClientState.into()))
-        } else {
-            *self.state.write() = ClientState::ShuttingDown;
-            Either::B(close::CloseFuture::new(self, reason))
+        {
+            let mut state_lock = self.state.write();
+            if *state_lock != ClientState::Established {
+                return Either::A(future::err(WampError::InvalidClientState.into()))
+            } else {
+                *state_lock = ClientState::ShuttingDown;
+            }
         }
+        
+        Either::B(close::CloseFuture::new(self, reason))
     }
 }
 impl<T: Transport> Drop for Client<T> {

@@ -30,12 +30,10 @@ fn integration_1() {
 
     let future = Client::<WebsocketTransport>::new(client_config)
         .and_then(|mut client| {
-            println!("got client! {:#?}", client);
-
             let future = client.subscribe(Uri::strict("org.test.channel").unwrap(), move |broadcast| {
                 println!("got broadcast: {:?}, {:?}", broadcast.arguments, broadcast.arguments_kw);
                 Box::new(futures::future::ok(()))
-            }).unwrap();
+            });
 
             *SAVED_CLIENT.lock().unwrap() = Some(client);
             future
