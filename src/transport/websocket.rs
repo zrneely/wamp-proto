@@ -24,18 +24,20 @@ use websocket::{
     message::{Message, OwnedMessage},
 };
 
-use proto::{
-    rx::{self, RxMessage},
-    TxMessage,
-};
 use {
     ConnectResult, GlobalScope, Id, ReceivedValues, RouterScope, SessionScope,
     Transport, TransportableValue, Uri
 };
+use error::WampError;
+use proto::{
+    rx::{self, RxMessage},
+    TxMessage,
+};
 
 /// An implementation of a websocket-based WAMP Transport.
 pub struct WebsocketTransport {
-    client: SplitSink<Client<TcpStream>>,
+    // These are both replaced with None and dropped by close().
+    client: Option<SplitSink<Client<TcpStream>>>,
     stream: Arc<Mutex<Option<SplitStream<Client<TcpStream>>>>>,
 
     // Used to tell the WebsocketTransportListener to finish. If
@@ -51,20 +53,30 @@ impl Sink for WebsocketTransport {
 
     fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
         let value = item.to_json();
-        self.client.start_send(Message::text(serde_json::to_string(&value)?).into()).map(|async| {
-            match async {
-                AsyncSink::NotReady(_) => AsyncSink::NotReady(item),
-                AsyncSink::Ready => AsyncSink::Ready,
-            }
-        }).map_err(|e| e.into())
+        if let Some(ref mut client) = self.client {
+            let message = Message::text(serde_json::to_string(&value)?).into();
+            client.start_send(message).map(|async| {
+                match async {
+                    AsyncSink::NotReady(_) => AsyncSink::NotReady(item),
+                    AsyncSink::Ready => AsyncSink::Ready,
+                }
+            }).map_err(|e| e.into())
+        } else {
+            Err(WampError::TransportStreamClosed.into())
+        }
     }
 
     fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
-        self.client.poll_complete().map_err(|e| e.into())
+        if let Some(ref mut client) = self.client {
+            client.poll_complete().map_err(|e| e.into())
+        } else {
+            Err(WampError::TransportStreamClosed.into())
+        }
     }
 }
 impl Transport for WebsocketTransport {
     type ConnectFuture = WebsocketTransportConnectFuture;
+    type CloseFuture = WebsocketTransportCloseFuture;
 
     fn connect(url: &str) -> ConnectResult<Self> {
         let received_values = ReceivedValues::default();
@@ -95,7 +107,7 @@ impl Transport for WebsocketTransport {
         }
     }
 
-    fn close(&mut self) {
+    fn close(&mut self) -> Self::CloseFuture {
         // Dropping the stream will close the listener; we also spawn a new task to close the client.
         self.stream.lock().take();
         debug!("WebsocketTransport dropped stream");
@@ -105,12 +117,18 @@ impl Transport for WebsocketTransport {
             let _ = sender.send(());
             debug!("WebsocketTransport sent stop signal to WebsocketTransportListener");
         }
+
+        WebsocketTransportCloseFuture {
+            client: self.client.take(),
+        }
     }
 }
 impl Drop for WebsocketTransport {
     fn drop(&mut self) {
-        debug!("Closing WebsocketTransport");
-        Transport::close(self);
+        if let Some(sender) = self.listener_stop_sender.take() {
+            let _ = sender.send(());
+            warn!("WebsocketTransport sent stop signal to WebsocketTransportListener in drop!");
+        }
     }
 }
 
@@ -346,7 +364,7 @@ fn json_to_tv(value: &Value) -> Option<TransportableValue> {
     })
 }
 
-/// Returned by [`WebsocketTransport::Connect`]; resolves to a [`WebsocketTransport`].
+/// Returned by [`WebsocketTransport::connect`]; resolves to a [`WebsocketTransport`].
 pub struct WebsocketTransportConnectFuture {
     future: Box<Future<Item = (Client<TcpStream>, HeaderMap), Error = Error> + Send>,
     received_values: Option<ReceivedValues>,
@@ -363,7 +381,7 @@ impl Future for WebsocketTransportConnectFuture {
                 let (client, stream) = client.split();
 
                 return Ok(Async::Ready(WebsocketTransport {
-                    client,
+                    client: Some(client),
                     stream: Arc::new(Mutex::new(Some(stream))),
                     received_values: Some(self.received_values
                         .take()
@@ -372,6 +390,30 @@ impl Future for WebsocketTransportConnectFuture {
                     listener_stop_sender: None,
                 }))
             }
+        }
+    }
+}
+
+/// Returned by [`WebsocketTransport::close`]; resolves to nothing.
+pub struct WebsocketTransportCloseFuture {
+    client: Option<SplitSink<Client<TcpStream>>>
+}
+impl Future for WebsocketTransportCloseFuture {
+    type Item = ();
+    type Error = Error;
+
+    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+        if let Some(ref mut client) = self.client {
+            match client.close() {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    warn!("Error in WebsocketTransportCloseFuture: {:?}", e);
+                    Err(e.into())
+                }
+            }
+        } else {
+            debug!("WebsocketTransportCloseFuture has no client!");
+            Ok(Async::Ready(()))
         }
     }
 }

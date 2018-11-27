@@ -253,6 +253,8 @@ impl TransportableValue {
 pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> + Send {
     /// The type of future returned when this transport opens a connection.
     type ConnectFuture: Future<Item = Self, Error = Error> + Send;
+    /// The type of future returned when this transport is closed.
+    type CloseFuture: Future<Item = (), Error = Error> + Send;
 
     /// Asynchronously constructs a transport to the router at the given location. This method
     /// must be called under a Tokio runtime.
@@ -291,9 +293,7 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> + Sen
 
     /// Closes whatever connection this has open and stops listening for incoming messages.
     /// Calling this before `listen` is undefined behavior.
-    ///
-    /// This method is allowed to do blocking work.
-    fn close(&mut self);
+    fn close(&mut self) -> Self::CloseFuture;
 }
 
 /// The result of connecting to a channel.

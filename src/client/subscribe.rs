@@ -6,42 +6,35 @@ use std::time::Instant;
 
 use failure::Error;
 use futures::{Async, AsyncSink, Future, sync::oneshot};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
 use {Id, ReceivedValues, RouterScope, SessionScope, Transport, Uri};
-use client::{BroadcastHandler, Client};
+use client::{BroadcastHandler, Client, ClientState};
+use error::WampError;
 use proto::TxMessage;
 
 /// The result of subscribing to a channel.
 pub(super) struct Subscription {
     // The ID of the subscription, chosen by the router.
     subscription_id: Id<RouterScope>,
-    // The topic subscribed to.
-    topic: Uri,
-    // A handle to tell the associated task to stop listening.
-    listener_stop_sender: oneshot::Sender<()>,
+    /// A handle to tell the associated task to stop listening.
+    pub listener_stop_sender: oneshot::Sender<()>,
 }
 impl fmt::Debug for Subscription {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "Subscription {{ subscription_id: {:?}, topic: {:?} }}",
-            self.subscription_id,
-            self.topic
-        )
+        write!(f, "Subscription {{ subscription_id: {:?} }}", self.subscription_id)
     }
 }
 impl cmp::PartialEq for Subscription {
     fn eq(&self, other: &Self) -> bool {
-        (self.subscription_id == other.subscription_id) && (self.topic == other.topic)
+        self.subscription_id == other.subscription_id
     }
 }
 impl cmp::Eq for Subscription {}
 impl hash::Hash for Subscription {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.subscription_id.hash(state);
-        self.topic.hash(state);
     }
 }
 
@@ -106,6 +99,7 @@ pub(super) struct SubscriptionFuture<T: Transport> {
     sender: Arc<Mutex<T>>,
     received: ReceivedValues,
     subscriptions: Arc<Mutex<HashMap<Id<RouterScope>, Subscription>>>,
+    client_state: Arc<RwLock<ClientState>>,
 }
 impl <T: Transport> SubscriptionFuture<T> {
     pub(super) fn new(client: &mut Client<T>, topic: Uri, handler: BroadcastHandler) -> Self {
@@ -124,6 +118,7 @@ impl <T: Transport> SubscriptionFuture<T> {
             sender: client.sender.clone(),
             received: client.received.clone(),
             subscriptions: client.subscriptions.clone(),
+            client_state: client.state.clone(),
         }
     }
 }
@@ -135,6 +130,14 @@ impl <T: Transport> Future for SubscriptionFuture<T> {
         loop {
             trace!("SubscriptionFuture: {:?}", self.state);
             super::check_for_timeout(&mut self.timeout)?;
+
+            match *self.client_state.read() {
+                ClientState::Established => {},
+                ref state => {
+                    error!("SubscriptionFuture with unexpected client state {:?}", state);
+                    return Err(WampError::InvalidClientState.into())
+                },
+            }
 
             let mut pending = false;
             self.state = match self.state {
@@ -188,7 +191,6 @@ impl <T: Transport> Future for SubscriptionFuture<T> {
                             info!("Subscribed to {:?} (ID: {:?})", self.topic, msg.subscription);
                             self.subscriptions.lock().insert(msg.subscription, Subscription {
                                 subscription_id: msg.subscription,
-                                topic: self.topic.clone(),
                                 listener_stop_sender: sender,
                             });
 

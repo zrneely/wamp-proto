@@ -10,6 +10,7 @@ use tokio::timer::Delay;
 
 use {ReceivedValues, Transport, Uri};
 use client::{Client, ClientState};
+use error::WampError;
 use proto::TxMessage;
 
 #[derive(Debug)]
@@ -52,6 +53,14 @@ impl<T> Future for CloseFuture<T> where T: Transport {
         loop {
             trace!("CloseFuture: {:?}", self.state);
             super::check_for_timeout(&mut self.timeout)?;
+
+            match *self.client_state.read() {
+                ClientState::ShuttingDown => {},
+                ref state => {
+                    error!("CloseFuture with unexpected client state {:?}", state);
+                    return Err(WampError::InvalidClientState.into())
+                },
+            }
 
             let mut pending = false;
             self.state = match self.state {

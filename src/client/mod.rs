@@ -206,15 +206,15 @@ impl <T: Transport> Client<T> {
     /// This method returns a future which will resolve to success once the subscription is
     /// acknowledged by the router. The value returned from the future is the subscription ID,
     /// which can be given to [`unsubscribe`] to cancel the subscription.
-    /// 
+    ///
     /// # Failure Modes
-    /// 
+    ///
     /// * If the client is closed (either because of a local or remote closure), the returned future
     /// will immediately resolve with an error.
-    /// 
+    ///
     /// * If the router does not support the "broker" role, the returned future will immediately resolve
     /// with an error.
-    /// 
+    ///
     /// * If the router does not acknowledge the subscription within the client timeout period, the returned
     /// future will resolve with an error.
     #[cfg(feature = "subscriber")]
@@ -245,6 +245,7 @@ impl <T: Transport> Client<T> {
     /// and resolves with an error otherwise. After this is called, all incoming messages except
     /// acknowledgement of our disconnection is ignored.
     pub fn close(&mut self, reason: Uri) -> impl Future<Item = (), Error = Error> {
+        // Use anonymous scope to limit the time we have the lock on our state
         {
             let mut state_lock = self.state.write();
             if *state_lock != ClientState::Established {
@@ -252,13 +253,30 @@ impl <T: Transport> Client<T> {
             } else {
                 *state_lock = ClientState::ShuttingDown;
 
+                #[cfg(feature = "subscriber")]
+                self.close_all_subscriptions();
+
                 if let Some(sender) = self.proto_msg_stop_sender.take() {
                     let _ = sender.send(());
                 }
             }
         }
-        
-        Either::B(close::CloseFuture::new(self, reason))
+
+        let sender = self.sender.clone();
+        Either::B(close::CloseFuture::new(self, reason).and_then(move |_| {
+            let mut lock = sender.lock();
+            Transport::close(&mut *lock)
+        }))
+    }
+
+    // Terminates all tasks associated with our active subscriptions. Does NOT send
+    // UNSUBSCRIBE messages.
+    #[cfg(feature = "subscriber")]
+    fn close_all_subscriptions(&self) {
+        let mut subs = self.subscriptions.lock();
+        for (_, mut subscription) in subs.drain() {
+            let _ = subscription.listener_stop_sender.send(());
+        }
     }
 }
 impl<T: Transport> Drop for Client<T> {

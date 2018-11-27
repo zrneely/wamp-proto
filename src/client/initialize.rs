@@ -8,9 +8,10 @@ use futures::{Async, AsyncSink, Future, sync::oneshot};
 use parking_lot::{Mutex, RwLock};
 use tokio::timer::Delay;
 
-use {ReceivedValues, Transport, TransportableValue as TV, Uri};
+use {ReceivedValues, Transport, TransportableValue as TV};
 use client::{Client, ClientState, RouterCapabilities};
 use proto::TxMessage;
+use uri::{Uri, known_uri};
 
 #[derive(Debug)]
 enum ProtocolMessageListenerState {
@@ -25,6 +26,7 @@ struct ProtocolMessageListener<T: Transport> {
     values: ReceivedValues,
     client_state: Arc<RwLock<ClientState>>,
 
+    state: ProtocolMessageListenerState,
     stop_receiver: oneshot::Receiver<()>,
 }
 impl<T: Transport> Future for ProtocolMessageListener<T> {
@@ -45,7 +47,73 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                 }
             }
 
-            // TODO: listen for GOODBYE or ABORT messages (ERROR?)
+            let mut pending = false;
+            self.state = match self.state {
+                ProtocolMessageListenerState::Ready => {
+                    // Poll for ABORT
+                    match self.values.abort.lock().poll_take(|_| true) {
+                        Async::Ready(msg) => {
+                            warn!("Received ABORT from router: \"{:?}\" ({:?})", msg.reason, msg.details);
+                            *self.client_state.write() = ClientState::Closed;
+                            return Ok(Async::Ready(()))
+                        }
+                        Async::NotReady => {},
+                    };
+
+                    // Poll for GOODBYE
+                    match self.values.abort.lock().poll_take(|_| true) {
+                        Async::Ready(msg) => {
+                            info!("Received GOODBYE from router: \"{:?}\" ({:?})", msg.reason, msg.details);
+                            *self.client_state.write() = ClientState::Closing;
+                            ProtocolMessageListenerState::StartReplyGoodbye
+                        }
+                        Async::NotReady => {
+                            pending = true;
+                            ProtocolMessageListenerState::Ready
+                        }
+                    }
+                }
+                ProtocolMessageListenerState::StartReplyGoodbye => {
+                    let message = TxMessage::Goodbye {
+                        details: HashMap::new(),
+                        reason: Uri::raw(known_uri::session_close::goodbye_and_out.to_string()),
+                    };
+                    match self.sender.lock().start_send(message) {
+                        Ok(AsyncSink::NotReady(_)) => {
+                            pending = true;
+                            ProtocolMessageListenerState::StartReplyGoodbye
+                        }
+                        Ok(AsyncSink::Ready) => ProtocolMessageListenerState::SendGoodbye,
+                        Err(e) => {
+                            error!(
+                                "ProtocolMessageListener got err {:?} while initiating GOODBYE response!",
+                                e
+                            );
+                            return Err(())
+                        }
+                    }
+                }
+                ProtocolMessageListenerState::SendGoodbye => {
+                    match self.sender.lock().poll_complete() {
+                        Ok(Async::NotReady) => {
+                            pending = true;
+                            ProtocolMessageListenerState::SendGoodbye
+                        }
+                        Ok(Async::Ready(_)) => return Ok(Async::Ready(())),
+                        Err(e) => {
+                            error!(
+                                "ProtocolMessageListener got err {:?} while flushing GOODBYE response!",
+                                e
+                            );
+                            return Err(())
+                        }
+                    }
+                }
+            };
+
+            if pending {
+                return Ok(Async::NotReady)
+            }
         }
     }
 }
@@ -163,6 +231,7 @@ impl <T> Future for InitializeFuture<T> where T: Transport + 'static {
                                 sender: self.sender.clone(),
                                 values: self.received.clone(),
                                 client_state: client_state.clone(),
+                                state: ProtocolMessageListenerState::Ready,
                                 stop_receiver: receiver,
                             };
                             tokio::spawn(proto_msg_listener);
