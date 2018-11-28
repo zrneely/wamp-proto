@@ -185,6 +185,7 @@ where
         timeout_duration: Duration,
         shutdown_timeout_duration: Duration,
         panic_on_drop_while_open: bool,
+        user_agent: Option<String>,
     ) -> Self {
         let timeout = Delay::new(Instant::now() + timeout_duration);
         sender.listen();
@@ -210,6 +211,11 @@ where
                         }
                         TV::Dict(roles)
                     });
+
+                    if let Some(agent) = user_agent {
+                        details.insert("agent".into(), TV::String(agent));
+                    }
+
                     details
                 },
             })),

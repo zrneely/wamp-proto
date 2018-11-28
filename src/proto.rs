@@ -40,7 +40,7 @@ pub enum TxMessage {
     Hello {
         /// The realm to connect to.
         realm: Uri,
-        /// Describes this peer's capabilities.
+        /// Describes this peer's capabilities. Could also include a user-agent string.
         details: Dict,
     },
 

@@ -25,7 +25,7 @@ fn integration_1() {
     // TODO: clean shutdown on timeout or network error from transport
     client_config.timeout = Duration::from_secs(60 * 10);
     client_config.shutdown_timeout = Duration::from_secs(60 * 10);
-    client_config.panic_on_drop_while_open = false;
+    client_config.user_agent = Some("WampProto Test".into());
 
     let future = Client::<WebsocketTransport>::new(client_config)
         .and_then(|mut client| {

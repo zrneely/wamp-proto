@@ -75,6 +75,7 @@ type StopSender = oneshot::Sender<()>;
 // TODO: rename to ClientResourceHandle or something
 struct ClientTaskTracker<T: Transport> {
     sender: Mutex<T>,
+    // Used to tell the ProtocolMessageListener to stop when we're shutting down
     proto_msg_stop_sender: Mutex<Option<StopSender>>,
 
     #[cfg(feature = "subscriber")]
@@ -148,6 +149,8 @@ pub struct ClientConfig<'a> {
     pub shutdown_timeout: Duration,
     /// If true, the client will panic when dropped if it's still open.
     pub panic_on_drop_while_open: bool,
+    /// The user-agent string that the client will optionally send to the router.
+    pub user_agent: Option<String>,
 }
 impl<'a> ClientConfig<'a> {
     /// Creates a new ClientConfig with some default values. They can be overridden after creation if
@@ -156,6 +159,7 @@ impl<'a> ClientConfig<'a> {
     /// * `timeout`: 10 seconds
     /// * `shutdown_timeout`: 1 second
     /// * `panic_on_drop_while_open`: true
+    /// * `user_agent`: None
     pub fn new(url: &'a str, realm: Uri) -> Self {
         ClientConfig {
             url,
@@ -163,6 +167,7 @@ impl<'a> ClientConfig<'a> {
             timeout: Duration::from_secs(10),
             shutdown_timeout: Duration::from_secs(1),
             panic_on_drop_while_open: true,
+            user_agent: None,
         }
     }
 }
@@ -211,6 +216,7 @@ impl<T: Transport> Client<T> {
             timeout,
             shutdown_timeout,
             panic_on_drop_while_open,
+            user_agent,
         } = config;
         let ConnectResult {
             future,
@@ -225,6 +231,7 @@ impl<T: Transport> Client<T> {
                 timeout,
                 shutdown_timeout,
                 panic_on_drop_while_open,
+                user_agent,
             )
         })
     }
