@@ -19,7 +19,7 @@ enum CloseFutureState {
     WaitGoodbye,
 }
 
-pub(super) struct CloseFuture<T: Transport> {
+pub(in client) struct CloseFuture<T: Transport> {
     state: CloseFutureState,
 
     timeout: Delay,
@@ -57,7 +57,7 @@ where
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         loop {
             trace!("CloseFuture: {:?}", self.state);
-            super::check_for_timeout(&mut self.timeout)?;
+            ::client::check_for_timeout(&mut self.timeout)?;
 
             match *self.client_state.read() {
                 ClientState::ShuttingDown => {}

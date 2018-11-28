@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use failure::Error;
 use futures::{sync::oneshot, Async, AsyncSink, Future};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use tokio::timer::Delay;
 
 use client::{BroadcastHandler, Client, ClientState, ClientTaskTracker};
@@ -69,7 +69,7 @@ enum SubscriptionFutureState {
 }
 
 /// A future representing a completed subscription.
-pub(super) struct SubscriptionFuture<T: Transport> {
+pub(in client) struct SubscriptionFuture<T: Transport> {
     state: SubscriptionFutureState,
 
     topic: Uri,
@@ -82,7 +82,7 @@ pub(super) struct SubscriptionFuture<T: Transport> {
     task_tracker: Arc<ClientTaskTracker<T>>,
 }
 impl<T: Transport> SubscriptionFuture<T> {
-    pub(super) fn new(client: &mut Client<T>, topic: Uri, handler: BroadcastHandler) -> Self {
+    pub fn new(client: &mut Client<T>, topic: Uri, handler: BroadcastHandler) -> Self {
         let request_id = Id::<SessionScope>::next();
         SubscriptionFuture {
             state: SubscriptionFutureState::StartSendSubscribe(Some(TxMessage::Subscribe {
@@ -109,7 +109,7 @@ impl<T: Transport> Future for SubscriptionFuture<T> {
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         loop {
             trace!("SubscriptionFuture: {:?}", self.state);
-            super::check_for_timeout(&mut self.timeout)?;
+            ::client::check_for_timeout(&mut self.timeout)?;
 
             match *self.client_state.read() {
                 ClientState::Established => {}

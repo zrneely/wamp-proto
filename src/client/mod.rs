@@ -17,11 +17,15 @@ use {
     TransportableValue as TV, Uri,
 };
 
-mod close;
-mod initialize;
+mod ops {
+    pub mod close;
+    pub mod initialize;
 
-#[cfg(feature = "subscriber")]
-mod subscribe;
+    #[cfg(feature = "subscriber")]
+    pub mod subscribe;
+    #[cfg(feature = "subscriber")]
+    pub mod unsubscribe;
+}
 
 // helper for most operations
 fn check_for_timeout(timeout: &mut Delay) -> Result<(), Error> {
@@ -214,7 +218,7 @@ impl<T: Transport> Client<T> {
         } = T::connect(url);
 
         future.and_then(move |transport| {
-            initialize::InitializeFuture::new(
+            ops::initialize::InitializeFuture::new(
                 transport,
                 received_values,
                 realm,
@@ -308,7 +312,7 @@ impl<T: Transport> Client<T> {
         } else if !self.router_capabilities.broker {
             Either::A(future::err(WampError::RouterSupportMissing.into()))
         } else {
-            Either::B(subscribe::SubscriptionFuture::new(
+            Either::B(ops::subscribe::SubscriptionFuture::new(
                 self,
                 topic,
                 BroadcastHandler {
@@ -318,11 +322,11 @@ impl<T: Transport> Client<T> {
         }
     }
 
-    //#[cfg(feature = "subscriber")]
-    ///// Unsubscribes from a channel.
-    //fn unsubscribe(&mut self, subscription: Subscription) -> impl Future<Item=(), Error=Error> {
-    //    unimplemented!()
-    //}
+    #[cfg(feature = "subscriber")]
+    /// Unsubscribes from a channel.
+    fn unsubscribe(&mut self, subscription: Id<RouterScope>) -> impl Future<Item=(), Error=Error> {
+       unimplemented!()
+    }
 
     /// Closes the connection to the server. The returned future resolves with success if
     /// the connected router actively acknowledges our disconnect within the shutdown_timeout,
@@ -343,7 +347,7 @@ impl<T: Transport> Client<T> {
 
         let task_tracker = self.task_tracker.clone();
         let state = self.state.clone();
-        Either::B(close::CloseFuture::new(self, reason).and_then(move |_| {
+        Either::B(ops::close::CloseFuture::new(self, reason).and_then(move |_| {
             // We've entered the Closed state now that CloseFuture is resolved.
             // Stop listening for incoming ABORT and GOODBYE messages and begin
             // closing the transport.

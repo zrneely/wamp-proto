@@ -162,7 +162,7 @@ enum InitializeFutureState {
     WaitWelcome,
 }
 
-pub(super) struct InitializeFuture<T: Transport + 'static> {
+pub(in client) struct InitializeFuture<T: Transport + 'static> {
     state: InitializeFutureState,
     timeout: Delay,
 
@@ -178,7 +178,7 @@ impl<T> InitializeFuture<T>
 where
     T: Transport + 'static,
 {
-    pub(crate) fn new(
+    pub fn new(
         mut sender: T,
         received: ReceivedValues,
         realm: Uri,
@@ -233,7 +233,7 @@ where
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         loop {
             trace!("InitializeFuture: {:?}", self.state);
-            super::check_for_timeout(&mut self.timeout)?;
+            ::client::check_for_timeout(&mut self.timeout)?;
 
             let mut pending = false;
             self.state = match self.state {

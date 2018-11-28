@@ -22,8 +22,8 @@ fn integration_1() {
 
     let mut client_config =
         ClientConfig::new("ws://127.0.0.1:9001", Uri::strict("org.test").unwrap());
-    client_config.timeout = Duration::from_secs(60 * 10);
-    client_config.shutdown_timeout = Duration::from_secs(60 * 10);
+    // client_config.timeout = Duration::from_secs(60 * 10);
+    // client_config.shutdown_timeout = Duration::from_secs(60 * 10);
     client_config.panic_on_drop_while_open = false;
 
     let future = Client::<WebsocketTransport>::new(client_config)
@@ -50,12 +50,12 @@ fn integration_1() {
                 SAVED_CLIENT.lock().unwrap().as_mut().unwrap().close(Uri::raw("wamp.error.goodbye".to_string()))
             }).map(|_| {
                 println!("client closed!");
-                
+
                 // Comment these two lines to simulate not dropping the client
                 SAVED_CLIENT.lock().unwrap().take();
                 println!("client dropped!");
 
-        }).map_err(|e| panic!("error: {:?}", e))
+        }).map_err(|e| println!("error: {:?}", e))
         .map(|_| ());
 
     tokio::run(future);
