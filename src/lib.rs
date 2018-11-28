@@ -553,7 +553,7 @@ mod tests {
         let value = json!("a.b.c.d");
         assert_eq!(
             Uri::raw("a.b.c.d".into()),
-            serde_json::from_value(value).unwrap()
+            serde_json::from_value::<Uri>(value).unwrap()
         );
 
         let value = json!(["a", 1]);
