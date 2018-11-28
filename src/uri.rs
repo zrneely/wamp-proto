@@ -147,6 +147,12 @@ impl fmt::Display for Uri {
         write!(f, "{}", self.0)
     }
 }
+impl<'a> PartialEq<&'a str> for Uri {
+    fn eq(&self, other: &&'a str) -> bool {
+        let Uri(ref val) = self;
+        val == other
+    }
+}
 
 #[cfg(test)]
 mod tests {

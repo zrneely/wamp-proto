@@ -62,10 +62,11 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                             ProtocolMessageListenerState::StopAllTasks
                         }
 
-                        // Poll for GOODBYE - TODO don't do this when in ShuttingDown state (user-initiated close)
-                        // to avoid accidentally eating the response GOODBYE message. Or filter on the reason not being
-                        // goodbye_and_out?
-                        Async::NotReady => match self.values.goodbye.lock().poll_take(|_| true) {
+                        // Poll for GOODBYEs that don't match the expected response to a self-initiated
+                        // GOODBYE.
+                        Async::NotReady => match self.values.goodbye.lock().poll_take(|msg| {
+                            msg.reason != known_uri::session_close::goodbye_and_out
+                        }) {
                             Async::Ready(msg) => {
                                 info!(
                                     "Received GOODBYE from router: \"{:?}\" ({:?})",
@@ -119,7 +120,7 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
 
                 ProtocolMessageListenerState::StopAllTasks => {
                     info!("ProtocolMessageListener stopping all tasks!");
-                    self.task_tracker.stop_all();
+                    self.task_tracker.stop_all_except_proto_msg();
                     return Ok(Async::Ready(()));
                 }
             };
