@@ -32,7 +32,7 @@ impl<T> CloseFuture<T>
 where
     T: Transport,
 {
-    pub fn new(client: &mut Client<T>, reason: Uri) -> Self {
+    pub fn new(client: &Client<T>, reason: Uri) -> Self {
         CloseFuture {
             state: CloseFutureState::StartSendGoodbye(Some(TxMessage::Goodbye {
                 details: HashMap::new(),

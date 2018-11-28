@@ -208,6 +208,7 @@ impl WebsocketTransportListener {
                         rx::Abort::MSG_CODE => self.handle_abort(&vals[1..]),
                         rx::Goodbye::MSG_CODE => self.handle_goodbye(&vals[1..]),
                         rx::Subscribed::MSG_CODE => self.handle_subscribed(&vals[1..]),
+                        rx::Unsubscribed::MSG_CODE =>  self.handle_unsubscribed(&vals[1..]),
 
                         _ => {
                             warn!("Received unknown message code {}", code);
@@ -357,6 +358,33 @@ impl WebsocketTransportListener {
             .insert(rx::Subscribed {
                 request,
                 subscription,
+            });
+    }
+
+    fn handle_unsubscribed(&mut self, msg: &[Value]) {
+        if msg.len() != 1 {
+            warn!("Bad UNSUBSCRIBED message length");
+            return;
+        }
+
+        let request: Id<SessionScope>;
+        
+        if let Some(request_id_raw) = msg[0].as_u64() {
+            request = Id::<SessionScope>::from_raw_value(request_id_raw);
+        } else {
+            warn!("Bad UNSUBSCRIBED message request ID {:?}", msg[0]);
+            return;
+        }
+
+        debug!(
+            "Adding UNSUBSCRIBED message: {:?}",
+            request
+        );
+        self.received_values
+            .unsubscribed
+            .lock()
+            .insert(rx::Unsubscribed {
+                request,
             });
     }
 }
@@ -695,6 +723,45 @@ mod tests {
 
         println!("Scenario 4: Too many arguments");
         listener.handle_subscribed(&[json!(12345), json!(23456), json!(34567)]);
+        assert_eq!(0, rv.len());
+    }
+
+    #[test]
+    fn handle_unsubscribed_test() {
+        let rv = ReceivedValues::default();
+        let (_sender, receiver) = oneshot::channel();
+        let mut listener = WebsocketTransportListener {
+            stream: unsafe { ::std::mem::uninitialized() },
+            received_values: rv.clone(),
+            stop_receiver: receiver,
+        };
+
+        println!("Scenario 0: happy path");
+        listener.handle_unsubscribed(&[json!(12345)]);
+        assert_eq!(1, rv.unsubscribed.lock().len());
+        assert_eq!(1, rv.len());
+        let query = poll_fn(|| {
+            let val = try_ready!({
+                let res: Result<_, &'static str> = Ok(rv.unsubscribed.lock().poll_take(|_| true));
+                res
+            });
+            if Id::<SessionScope>::from_raw_value(12345) != val.request {
+                return Err(format!("request ID {:?} did not match", val.request));
+            }
+            Ok(Async::Ready(()))
+        });
+        assert_eq!(current_thread::block_on_all(query), Ok(()));
+
+        println!("Scenario 1: request is not a number");
+        listener.handle_unsubscribed(&[json!("foobar")]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 2: Not enough arguments");
+        listener.handle_unsubscribed(&[]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 3: Too many arguments");
+        listener.handle_unsubscribed(&[json!(12345), json!(23456)]);
         assert_eq!(0, rv.len());
     }
 

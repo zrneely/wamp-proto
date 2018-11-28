@@ -82,7 +82,7 @@ pub(in client) struct SubscriptionFuture<T: Transport> {
     task_tracker: Arc<ClientTaskTracker<T>>,
 }
 impl<T: Transport> SubscriptionFuture<T> {
-    pub fn new(client: &mut Client<T>, topic: Uri, handler: BroadcastHandler) -> Self {
+    pub fn new(client: &Client<T>, topic: Uri, handler: BroadcastHandler) -> Self {
         let request_id = Id::<SessionScope>::next();
         SubscriptionFuture {
             state: SubscriptionFutureState::StartSendSubscribe(Some(TxMessage::Subscribe {

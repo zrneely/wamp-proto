@@ -324,8 +324,8 @@ impl<T: Transport> Client<T> {
 
     #[cfg(feature = "subscriber")]
     /// Unsubscribes from a channel.
-    fn unsubscribe(&mut self, subscription: Id<RouterScope>) -> impl Future<Item=(), Error=Error> {
-       unimplemented!()
+    pub fn unsubscribe(&mut self, subscription: Id<RouterScope>) -> impl Future<Item=(), Error=Error> {
+        ops::unsubscribe::UnsubscriptionFuture::new(self, subscription)
     }
 
     /// Closes the connection to the server. The returned future resolves with success if
