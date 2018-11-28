@@ -4,10 +4,10 @@ use std::time::Instant;
 
 use failure::Error;
 use futures::{Async, AsyncSink, Future};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use tokio::timer::Delay;
 
-use client::{Client, ClientState};
+use client::{Client, ClientState, ClientTaskTracker};
 use error::WampError;
 use proto::TxMessage;
 use {ReceivedValues, Transport, Uri};
@@ -24,9 +24,9 @@ pub(super) struct CloseFuture<T: Transport> {
 
     timeout: Delay,
 
-    sender: Arc<Mutex<T>>,
     received: ReceivedValues,
     client_state: Arc<RwLock<ClientState>>,
+    task_tracker: Arc<ClientTaskTracker<T>>,
 }
 impl<T> CloseFuture<T>
 where
@@ -41,9 +41,9 @@ where
 
             timeout: Delay::new(Instant::now() + client.shutdown_timeout_duration),
 
-            sender: client.sender.clone(),
             received: client.received.clone(),
             client_state: client.state.clone(),
+            task_tracker: client.task_tracker.clone(),
         }
     }
 }
@@ -73,7 +73,7 @@ where
                 // return NotReady.
                 CloseFutureState::StartSendGoodbye(ref mut message) => {
                     let message = message.take().expect("invalid CloseFutureState");
-                    match self.sender.lock().start_send(message)? {
+                    match self.task_tracker.get_sender().lock().start_send(message)? {
                         AsyncSink::NotReady(message) => {
                             pending = true;
                             CloseFutureState::StartSendGoodbye(Some(message))
@@ -83,7 +83,7 @@ where
                 }
 
                 // Step 2: Wait for the sender's message queue to empty. If it's not empty, return NotReady.
-                CloseFutureState::SendGoodbye => match self.sender.lock().poll_complete()? {
+                CloseFutureState::SendGoodbye => match self.task_tracker.get_sender().lock().poll_complete()? {
                     Async::NotReady => {
                         pending = true;
                         CloseFutureState::SendGoodbye

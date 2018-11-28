@@ -60,21 +60,26 @@ enum ClientState {
     ShuttingDown,
     // The router initiated a clean connection termination, and the client has not yet responded.
     Closing,
+    // We're completely done; the transport is closed.
+    TransportClosed,
 }
 
 type StopSender = oneshot::Sender<()>;
 // Tracks all of the tasks owned by a client. This is Send + Sync because StopSender is
 // Send + Sync. Mutex<T> is Send + Sync as long as T is Send. HashMap<K, V> is Send as long
 // as K and V are both Send.
-struct ClientTaskTracker {
+// TODO: rename to ClientResourceHandle or something
+struct ClientTaskTracker<T: Transport> {
+    sender: Mutex<T>,
     proto_msg_stop_sender: Mutex<Option<StopSender>>,
 
     #[cfg(feature = "subscriber")]
     subscriptions: Mutex<HashMap<Id<RouterScope>, StopSender>>,
 }
-impl ClientTaskTracker {
-    fn new(proto_msg_stop_sender: StopSender) -> Arc<Self> {
+impl<T> ClientTaskTracker<T> where T: Transport {
+    fn new(sender: T, proto_msg_stop_sender: StopSender) -> Arc<Self> {
         Arc::new(ClientTaskTracker {
+            sender: Mutex::new(sender),
             proto_msg_stop_sender: Mutex::new(Some(proto_msg_stop_sender)),
 
             #[cfg(feature = "subscriber")]
@@ -82,10 +87,19 @@ impl ClientTaskTracker {
         })
     }
 
+    fn get_sender(&self) -> &Mutex<T> {
+        &self.sender
+    }
+
     fn stop_proto_msg_listener(&self) {
         if let Some(sender) = self.proto_msg_stop_sender.lock().take() {
             let _ = sender.send(());
         }
+    }
+
+    fn close_transport(&self) -> T::CloseFuture {
+        let mut lock = self.sender.lock();
+        Transport::close(&mut *lock)
     }
 
     #[cfg(feature = "subscriber")]
@@ -155,7 +169,6 @@ impl<'a> ClientConfig<'a> {
 /// selectively enabled if not all necessary (to improve compilation time) with the Cargo
 /// features `callee`, `caller`, `publisher`, and `subscriber`.
 pub struct Client<T: Transport> {
-    sender: Arc<Mutex<T>>,
     received: ReceivedValues,
 
     session_id: Id<GlobalScope>,
@@ -165,7 +178,7 @@ pub struct Client<T: Transport> {
 
     // All operations should check the state before accepting incoming messages
     state: Arc<RwLock<ClientState>>,
-    task_tracker: Arc<ClientTaskTracker>,
+    task_tracker: Arc<ClientTaskTracker<T>>,
 
     panic_on_drop_while_open: bool,
 }
@@ -328,18 +341,17 @@ impl<T: Transport> Client<T> {
             }
         }
 
-        let sender = self.sender.clone();
         let task_tracker = self.task_tracker.clone();
+        let state = self.state.clone();
         Either::B(close::CloseFuture::new(self, reason).and_then(move |_| {
             // We've entered the Closed state now that CloseFuture is resolved.
             // Stop listening for incoming ABORT and GOODBYE messages and begin
             // closing the transport.
             task_tracker.stop_proto_msg_listener();
-
-            let mut lock = sender.lock();
-            Transport::close(&mut *lock)
-            // TODO: and_then again to set state to some "TransportClosed" state that the drop
-            // handler checks for instead of "Closed"?
+            task_tracker.close_transport()
+        }).and_then(move |_| {
+            *state.write() = ClientState::TransportClosed;
+            future::ok(())
         }))
     }
 }
@@ -350,14 +362,14 @@ impl<T: Transport> Drop for Client<T> {
         self.task_tracker.stop_proto_msg_listener();
 
         let state = self.state.read();
-        if *state != ClientState::Closed {
+        if *state != ClientState::TransportClosed {
             error!(
-                "Client was not closed before being dropped (actual state: {:?})!",
+                "Client was not completely closed before being dropped (actual state: {:?})!",
                 *state
             );
 
             if self.panic_on_drop_while_open {
-                panic!("Client was not closed before being dropped!");
+                panic!("Client was not completely closed before being dropped!");
             }
         }
     }

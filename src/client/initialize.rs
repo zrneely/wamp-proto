@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use failure::Error;
 use futures::{sync::oneshot, Async, AsyncSink, Future};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use tokio::timer::Delay;
 
 use client::{Client, ClientState, ClientTaskTracker, RouterCapabilities};
@@ -18,14 +18,15 @@ enum ProtocolMessageListenerState {
     StartReplyGoodbye,
     SendGoodbye,
     StopAllTasks,
+    CloseTransport,
 }
 
 // Used to listen for ABORT and GOODBYE messages from the router.
 struct ProtocolMessageListener<T: Transport> {
-    sender: Arc<Mutex<T>>,
     values: ReceivedValues,
     client_state: Arc<RwLock<ClientState>>,
-    task_tracker: Arc<ClientTaskTracker>,
+    task_tracker: Arc<ClientTaskTracker<T>>,
+    transport_close_future: Option<T::CloseFuture>,
 
     state: ProtocolMessageListenerState,
     stop_receiver: oneshot::Receiver<()>,
@@ -92,7 +93,7 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                         "ProtocolMessageListenerState sending GOODBYE response: {:?}",
                         message
                     );
-                    match self.sender.lock().start_send(message) {
+                    match self.task_tracker.get_sender().lock().start_send(message) {
                         Ok(AsyncSink::NotReady(_)) => {
                             pending = true;
                             ProtocolMessageListenerState::StartReplyGoodbye
@@ -105,7 +106,7 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                     }
                 }
                 ProtocolMessageListenerState::SendGoodbye => {
-                    match self.sender.lock().poll_complete() {
+                    match self.task_tracker.get_sender().lock().poll_complete() {
                         Ok(Async::NotReady) => {
                             pending = true;
                             ProtocolMessageListenerState::SendGoodbye
@@ -121,7 +122,22 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                 ProtocolMessageListenerState::StopAllTasks => {
                     info!("ProtocolMessageListener stopping all tasks!");
                     self.task_tracker.stop_all_except_proto_msg();
-                    return Ok(Async::Ready(()));
+                    self.transport_close_future = Some(self.task_tracker.close_transport());
+                    ProtocolMessageListenerState::CloseTransport
+                }
+
+                ProtocolMessageListenerState::CloseTransport => {
+                    match self.transport_close_future.as_mut().unwrap().poll() {
+                        Ok(Async::NotReady) => {
+                            pending = true;
+                            ProtocolMessageListenerState::CloseTransport
+                        }
+                        Ok(Async::Ready(_)) => return Ok(Async::Ready(())),
+                        Err(e) => {
+                            error!("Error driving transport close future: {:?}", e);
+                            return Err(());
+                        }
+                    }
                 }
             };
 
@@ -148,7 +164,7 @@ pub(super) struct InitializeFuture<T: Transport + 'static> {
     shutdown_timeout_duration: Duration,
     panic_on_drop_while_open: bool,
 
-    sender: Arc<Mutex<T>>,
+    sender: Option<T>,
     received: ReceivedValues,
 }
 impl<T> InitializeFuture<T>
@@ -195,8 +211,7 @@ where
             timeout_duration,
             shutdown_timeout_duration,
             panic_on_drop_while_open,
-
-            sender: Arc::new(Mutex::new(sender)),
+            sender: Some(sender),
             received,
         }
     }
@@ -218,7 +233,7 @@ where
                 // Step 1: Add the hello message to the sender's message queue.
                 InitializeFutureState::StartSendHello(ref mut message) => {
                     let message = message.take().expect("invalid InitializeFutureState");
-                    match self.sender.lock().start_send(message)? {
+                    match self.sender.as_mut().unwrap().start_send(message)? {
                         AsyncSink::NotReady(message) => {
                             pending = true;
                             InitializeFutureState::StartSendHello(Some(message))
@@ -228,7 +243,7 @@ where
                 }
 
                 // Step 2: Wait for the sender's message queue to empty.
-                InitializeFutureState::SendHello => match self.sender.lock().poll_complete()? {
+                InitializeFutureState::SendHello => match self.sender.as_mut().unwrap().poll_complete()? {
                     Async::NotReady => {
                         pending = true;
                         InitializeFutureState::SendHello
@@ -249,22 +264,21 @@ where
                                 msg.session
                             );
 
-                            let (sender, receiver) = oneshot::channel();
-                            let task_tracker = ClientTaskTracker::new(sender);
+                            let (stop_sender, receiver) = oneshot::channel();
+                            let task_tracker = ClientTaskTracker::new(self.sender.take().unwrap(), stop_sender);
                             let client_state = Arc::new(RwLock::new(ClientState::Established));
 
                             let proto_msg_listener = ProtocolMessageListener {
-                                sender: self.sender.clone(),
                                 values: self.received.clone(),
                                 client_state: client_state.clone(),
                                 task_tracker: task_tracker.clone(),
+                                transport_close_future: None,
                                 state: ProtocolMessageListenerState::Ready,
                                 stop_receiver: receiver,
                             };
                             tokio::spawn(proto_msg_listener);
 
                             return Ok(Async::Ready(Client {
-                                sender: self.sender.clone(),
                                 received: self.received.clone(),
 
                                 session_id: msg.session,

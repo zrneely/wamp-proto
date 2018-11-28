@@ -77,10 +77,9 @@ pub(super) struct SubscriptionFuture<T: Transport> {
     request_id: Id<SessionScope>,
     timeout: Delay,
 
-    sender: Arc<Mutex<T>>,
     received: ReceivedValues,
     client_state: Arc<RwLock<ClientState>>,
-    task_tracker: Arc<ClientTaskTracker>,
+    task_tracker: Arc<ClientTaskTracker<T>>,
 }
 impl<T: Transport> SubscriptionFuture<T> {
     pub(super) fn new(client: &mut Client<T>, topic: Uri, handler: BroadcastHandler) -> Self {
@@ -97,7 +96,6 @@ impl<T: Transport> SubscriptionFuture<T> {
             handler: Some(handler),
             timeout: Delay::new(Instant::now() + client.timeout_duration),
 
-            sender: client.sender.clone(),
             received: client.received.clone(),
             client_state: client.state.clone(),
             task_tracker: client.task_tracker.clone(),
@@ -130,7 +128,7 @@ impl<T: Transport> Future for SubscriptionFuture<T> {
                 // is full, return NotReady.
                 SubscriptionFutureState::StartSendSubscribe(ref mut message) => {
                     let message = message.take().expect("invalid SubscriptionFutureState");
-                    match self.sender.lock().start_send(message)? {
+                    match self.task_tracker.get_sender().lock().start_send(message)? {
                         AsyncSink::NotReady(message) => {
                             pending = true;
                             SubscriptionFutureState::StartSendSubscribe(Some(message))
@@ -142,7 +140,7 @@ impl<T: Transport> Future for SubscriptionFuture<T> {
                 // Step 2: Wait for the sender's message queue to empty. If it's not empty, return
                 // NotReady.
                 SubscriptionFutureState::SendSubscribe => {
-                    match self.sender.lock().poll_complete()? {
+                    match self.task_tracker.get_sender().lock().poll_complete()? {
                         Async::NotReady => {
                             pending = true;
                             SubscriptionFutureState::SendSubscribe
