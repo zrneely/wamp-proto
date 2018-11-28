@@ -41,19 +41,20 @@ fn integration_1() {
             future
 
             // If we don't close ourselves and the router closes the connection, all tasks should
-            // terminate gracefully and this program should finish.
+            // terminate gracefully and this program should finish. Comment the and_then and map calls
+            // to simulate that.
 
-            // TODO: allow providing callbacks so API consumers can react to that happening.
+            }).and_then(|subscription| {
+                println!("got subscription {:?}", subscription);
+                println!("closing client");
+                SAVED_CLIENT.lock().unwrap().as_mut().unwrap().close(Uri::raw("wamp.error.goodbye".to_string()))
+            }).map(|_| {
+                println!("client closed!");
+                
+                // Comment these two lines to simulate not dropping the client
+                SAVED_CLIENT.lock().unwrap().take();
+                println!("client dropped!");
 
-            // }).and_then(|subscription| {
-            //     println!("got subscription {:?}", subscription);
-            //     println!("closing client");
-            //     SAVED_CLIENT.lock().unwrap().as_mut().unwrap().close(Uri::raw("wamp.error.goodbye".to_string()))
-            // }).map(|_| {
-            //     println!("client closed!");
-            //     SAVED_CLIENT.lock().unwrap().take();
-            //     println!("client dropped!");
-            //     ()
         }).map_err(|e| panic!("error: {:?}", e))
         .map(|_| ());
 

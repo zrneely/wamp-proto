@@ -63,24 +63,31 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                             ProtocolMessageListenerState::StopAllTasks
                         }
 
-                        // Poll for GOODBYEs that don't match the expected response to a self-initiated
-                        // GOODBYE.
-                        Async::NotReady => match self.values.goodbye.lock().poll_take(|msg| {
-                            msg.reason != known_uri::session_close::goodbye_and_out
-                        }) {
-                            Async::Ready(msg) => {
-                                info!(
-                                    "Received GOODBYE from router: \"{:?}\" ({:?})",
-                                    msg.reason, msg.details
-                                );
-                                *self.client_state.write() = ClientState::Closing;
-                                ProtocolMessageListenerState::StartReplyGoodbye
+                        // Poll for GOODBYEs, but only while we're in the "Established" state. Don't eat
+                        // expected GOODBYEs. We can't poll for ones that don't match the expected response
+                        // to a client-initiated GOODBYE because then we leave ourselves open to a hang
+                        // while connected to a badly-behaved router.
+                        Async::NotReady => if *self.client_state.read() == ClientState::Established {
+                            match self.values.goodbye.lock().poll_take(|_| true) {
+                                Async::Ready(msg) => {
+                                    info!(
+                                        "Received GOODBYE from router: \"{:?}\" ({:?})",
+                                        msg.reason, msg.details
+                                    );
+                                    *self.client_state.write() = ClientState::Closing;
+                                    ProtocolMessageListenerState::StartReplyGoodbye
+                                }
+                                Async::NotReady => {
+                                    pending = true;
+                                    ProtocolMessageListenerState::Ready
+                                }
                             }
-                            Async::NotReady => {
-                                pending = true;
-                                ProtocolMessageListenerState::Ready
-                            }
-                        },
+                        } else {
+                            // If we're not in the "Established" state, then act as though
+                            // we polled and didn't get anything.
+                            pending = true;
+                            ProtocolMessageListenerState::Ready
+                        }
                     }
                 }
 
