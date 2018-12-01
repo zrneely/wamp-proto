@@ -4,11 +4,11 @@ use std::time::Instant;
 
 use failure::Error;
 use futures::{Async, AsyncSink, Future};
-use parking_lot::RwLock;
 use tokio::timer::Delay;
 
 use client::{Client, ClientState, ClientTaskTracker};
 use error::WampError;
+use pollable::PollableValue;
 use proto::TxMessage;
 use {ReceivedValues, Transport, Uri};
 
@@ -25,7 +25,7 @@ pub(in client) struct CloseFuture<T: Transport> {
     timeout: Delay,
 
     received: ReceivedValues,
-    client_state: Arc<RwLock<ClientState>>,
+    client_state: PollableValue<ClientState>,
     task_tracker: Arc<ClientTaskTracker<T>>,
 }
 impl<T> CloseFuture<T>
@@ -59,8 +59,9 @@ where
             trace!("CloseFuture: {:?}", self.state);
             ::client::check_for_timeout(&mut self.timeout)?;
 
-            match *self.client_state.read() {
-                ClientState::ShuttingDown => {}
+            // We DO want to be notified if the client state changes while we're running.
+            match self.client_state.read(true) {
+                ClientState::ShuttingDown | ClientState::Closed => {}
                 ref state => {
                     error!("CloseFuture with unexpected client state {:?}", state);
                     return Err(WampError::InvalidClientState.into());
@@ -103,7 +104,7 @@ where
                                 "WAMP session closed: response {:?} ({:?})",
                                 msg.details, msg.reason
                             );
-                            *self.client_state.write() = ClientState::Closed;
+                            self.client_state.write(ClientState::Closed);
                             return Ok(Async::Ready(()));
                         }
                     }

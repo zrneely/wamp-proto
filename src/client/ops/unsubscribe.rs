@@ -3,11 +3,11 @@ use std::time::Instant;
 
 use failure::Error;
 use futures::{Async, AsyncSink, Future};
-use parking_lot::RwLock;
 use tokio::timer::Delay;
 
 use client::{Client, ClientState, ClientTaskTracker};
 use error::WampError;
+use pollable::PollableValue;
 use proto::TxMessage;
 use {Id, ReceivedValues, RouterScope, SessionScope, Transport};
 
@@ -27,7 +27,7 @@ pub(in client) struct UnsubscriptionFuture<T: Transport> {
     timeout: Delay,
 
     received: ReceivedValues,
-    client_state: Arc<RwLock<ClientState>>,
+    client_state: PollableValue<ClientState>,
     task_tracker: Arc<ClientTaskTracker<T>>,
 }
 impl<T: Transport> UnsubscriptionFuture<T> {
@@ -54,10 +54,10 @@ impl<T: Transport> Future for UnsubscriptionFuture<T> {
             trace!("UnsubscribeFuture: {:?}", self.state);
             ::client::check_for_timeout(&mut self.timeout)?;
 
-            match *self.client_state.read() {
+            match self.client_state.read(true) {
                 ClientState::Established => {}
                 ref state => {
-                    error!(
+                    warn!(
                         "UnsubscribeFuture with unexpected client state {:?}",
                         state
                     );

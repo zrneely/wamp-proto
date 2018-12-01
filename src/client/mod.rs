@@ -8,10 +8,11 @@ use futures::{
     sync::oneshot,
     Async,
 };
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use tokio::timer::Delay;
 
 use error::WampError;
+use pollable::PollableValue;
 use {
     ConnectResult, GlobalScope, Id, ReceivedValues, RouterScope, Transport,
     TransportableValue as TV, Uri,
@@ -46,7 +47,7 @@ struct BroadcastHandler {
 // The states a client can be in, according to the WAMP specification.
 // Clients are not made available to consumers of this library until they reach
 // their initial "Established" state.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ClientState {
     // The connection to the service is closed.
     Closed,
@@ -186,7 +187,7 @@ pub struct Client<T: Transport> {
     router_capabilities: RouterCapabilities,
 
     // All operations should check the state before accepting incoming messages
-    state: Arc<RwLock<ClientState>>,
+    state: PollableValue<ClientState>,
     task_tracker: Arc<ClientTaskTracker<T>>,
 
     panic_on_drop_while_open: bool,
@@ -314,9 +315,7 @@ impl<T: Transport> Client<T> {
     where
         F: 'static + Fn(Broadcast) -> Box<Future<Item = (), Error = Error>> + Send,
     {
-        if *self.state.read() != ClientState::Established {
-            Either::A(future::err(WampError::InvalidClientState.into()))
-        } else if !self.router_capabilities.broker {
+        if !self.router_capabilities.broker {
             Either::A(future::err(WampError::RouterSupportMissing.into()))
         } else {
             Either::B(ops::subscribe::SubscriptionFuture::new(
@@ -332,38 +331,35 @@ impl<T: Transport> Client<T> {
     #[cfg(feature = "subscriber")]
     /// Unsubscribes from a channel.
     pub fn unsubscribe(&mut self, subscription: Id<RouterScope>) -> impl Future<Item=(), Error=Error> {
-        ops::unsubscribe::UnsubscriptionFuture::new(self, subscription)
+        if !self.router_capabilities.broker {
+            Either::A(future::err(WampError::RouterSupportMissing.into()))
+        } else {
+            Either::B(ops::unsubscribe::UnsubscriptionFuture::new(self, subscription))
+        }
     }
 
     /// Closes the connection to the server. The returned future resolves with success if
     /// the connected router actively acknowledges our disconnect within the shutdown_timeout,
-    /// and resolves with an error otherwise. After this is called, all incoming messages except
-    /// acknowledgement of our disconnection is ignored.
+    /// and resolves with an error otherwise. After this is called (but before it resolves), all
+    /// incoming messages except acknowledgement of our disconnection are ignored.
     pub fn close(&mut self, reason: Uri) -> impl Future<Item = (), Error = Error> {
-        // Use anonymous scope to limit the time we have the lock on our state
-        {
-            let mut state_lock = self.state.write();
-            if *state_lock != ClientState::Established {
-                return Either::A(future::err(WampError::InvalidClientState.into()));
-            } else {
-                *state_lock = ClientState::ShuttingDown;
-                // Stop listening for incoming events and RPC invocations
-                self.task_tracker.stop_all_except_proto_msg();
-            }
-        }
+        self.state.write(ClientState::ShuttingDown);
+        
+        // Stop listening for incoming events and RPC invocations.
+        self.task_tracker.stop_all_except_proto_msg();
 
         let task_tracker = self.task_tracker.clone();
         let state = self.state.clone();
-        Either::B(ops::close::CloseFuture::new(self, reason).and_then(move |_| {
+        ops::close::CloseFuture::new(self, reason).and_then(move |_| {
             // We've entered the Closed state now that CloseFuture is resolved.
             // Stop listening for incoming ABORT and GOODBYE messages and begin
             // closing the transport.
             task_tracker.stop_proto_msg_listener();
             task_tracker.close_transport()
         }).and_then(move |_| {
-            *state.write() = ClientState::TransportClosed;
+            state.write(ClientState::TransportClosed);
             future::ok(())
-        }))
+        })
     }
 }
 impl<T: Transport> Drop for Client<T> {
@@ -372,11 +368,11 @@ impl<T: Transport> Drop for Client<T> {
         self.task_tracker.stop_all_except_proto_msg();
         self.task_tracker.stop_proto_msg_listener();
 
-        let state = self.state.read();
-        if *state != ClientState::TransportClosed {
+        let state = self.state.read(false);
+        if state != ClientState::TransportClosed {
             error!(
                 "Client was not completely closed before being dropped (actual state: {:?})!",
-                *state
+                state
             );
 
             if self.panic_on_drop_while_open {

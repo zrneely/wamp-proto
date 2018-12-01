@@ -1,5 +1,57 @@
+use std::sync::Arc;
+
 use futures::task::{self, Task};
 use futures::Async;
+use parking_lot::{Mutex, RwLock};
+
+/// A variable, shared between threads/tasks. When you read from this variable, you also
+/// implicitly register interest in future values of the variable as well, and the current
+/// task will be notified when the value changes.
+///
+/// From a usage perspective, this is basically an Arc<Mutex<T>> which will notify any task
+/// that reads from it when the value is updated in the future.
+#[derive(Clone, Debug)]
+pub struct PollableValue<T: Copy> {
+    val: Arc<RwLock<T>>,
+    tasks: Arc<Mutex<Vec<Task>>>,
+}
+impl<T> PollableValue<T> where T: Copy {
+    /// Creates a new pollable value.
+    pub fn new(value: T) -> Self {
+        PollableValue {
+            val: Arc::new(RwLock::new(value)),
+            tasks: Arc::new(Mutex::new(Vec::with_capacity(1))),
+        }
+    }
+
+    /// Takes a read lock on the value. If notify is true, registers the current task's interest in future
+    /// values of the variable.
+    pub fn read(&self, notify: bool) -> T {
+        if notify {
+            let task = task::current();
+            let mut lock = self.tasks.lock();
+            if !lock.iter().any(|t| t.will_notify_current()) {
+                // The current task is not yet interested, so add it to the list of interested
+                // tasks.
+                lock.push(task);
+            }
+        }
+
+        *self.val.read()
+    }
+
+    /// Assigns a new value to this variable. This will notify all tasks which have previously
+    /// called [`read`] on this value.
+    pub fn write(&self, val: T) {
+        *self.val.write() = val;
+
+        // Notify all registered tasks that a new value was added.
+        let mut lock = self.tasks.lock();
+        for task in lock.drain(..) {
+            task.notify();
+        }       
+    }
+}
 
 /// A set which registers interest in a potential value if a query finds no result. Requires
 /// external synchronization.

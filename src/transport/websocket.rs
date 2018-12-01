@@ -148,8 +148,11 @@ impl Future for WebsocketTransportListener {
 
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         self.poll_impl().map_err(|e| {
+            // If we get a transport error, tell the ProtocolMessageListener to stop and drop
+            // our underlying stream. The client will not call close() on us.
             error!("WebsocketTransportListener poll error: {:?}", e);
-            ()
+            self.stream.lock().take();
+            self.received_values.transport_errors.lock().insert(e);
         })
     }
 }
@@ -455,6 +458,7 @@ impl Future for WebsocketTransportCloseFuture {
     type Error = Error;
 
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+        trace!("WebsocketTransportCloseFuture wakeup");
         if let Some(ref mut client) = self.client {
             match client.close() {
                 Ok(v) => Ok(v),

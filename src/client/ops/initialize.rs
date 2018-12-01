@@ -4,10 +4,10 @@ use std::time::{Duration, Instant};
 
 use failure::Error;
 use futures::{sync::oneshot, Async, AsyncSink, Future};
-use parking_lot::RwLock;
 use tokio::timer::Delay;
 
 use client::{Client, ClientState, ClientTaskTracker, RouterCapabilities};
+use pollable::PollableValue;
 use proto::TxMessage;
 use uri::{known_uri, Uri};
 use {ReceivedValues, Transport, TransportableValue as TV};
@@ -24,7 +24,7 @@ enum ProtocolMessageListenerState {
 // Used to listen for ABORT and GOODBYE messages from the router.
 struct ProtocolMessageListener<T: Transport> {
     values: ReceivedValues,
-    client_state: Arc<RwLock<ClientState>>,
+    client_state: PollableValue<ClientState>,
     task_tracker: Arc<ClientTaskTracker<T>>,
     transport_close_future: Option<T::CloseFuture>,
 
@@ -49,6 +49,16 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                 }
             }
 
+            // Poll for transport errors
+            match self.values.transport_errors.lock().poll_take(|_| true) {
+                Async::Ready(err) => {
+                    warn!("Fatal transport error: \"{}\"", err);
+                    self.client_state.write(ClientState::TransportClosed);
+                    self.state = ProtocolMessageListenerState::StopAllTasks;
+                }
+                Async::NotReady => {}
+            }
+
             let mut pending = false;
             self.state = match self.state {
                 ProtocolMessageListenerState::Ready => {
@@ -59,7 +69,7 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                                 "Received ABORT from router: \"{:?}\" ({:?})",
                                 msg.reason, msg.details
                             );
-                            *self.client_state.write() = ClientState::Closed;
+                            self.client_state.write(ClientState::Closed);
                             ProtocolMessageListenerState::StopAllTasks
                         }
 
@@ -67,14 +77,17 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                         // expected GOODBYEs. We can't poll for ones that don't match the expected response
                         // to a client-initiated GOODBYE because then we leave ourselves open to a hang
                         // while connected to a badly-behaved router.
-                        Async::NotReady => if *self.client_state.read() == ClientState::Established {
+                        //
+                        // Also, we don't care if the client state changes. We'll be notified via our stop
+                        // listener.
+                        Async::NotReady => if self.client_state.read(false) == ClientState::Established {
                             match self.values.goodbye.lock().poll_take(|_| true) {
                                 Async::Ready(msg) => {
                                     info!(
                                         "Received GOODBYE from router: \"{:?}\" ({:?})",
                                         msg.reason, msg.details
                                     );
-                                    *self.client_state.write() = ClientState::Closing;
+                                    self.client_state.write(ClientState::Closing);
                                     ProtocolMessageListenerState::StartReplyGoodbye
                                 }
                                 Async::NotReady => {
@@ -129,14 +142,23 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                 ProtocolMessageListenerState::StopAllTasks => {
                     info!("ProtocolMessageListener stopping all tasks!");
                     self.task_tracker.stop_all_except_proto_msg();
-                    self.transport_close_future = Some(self.task_tracker.close_transport());
-                    ProtocolMessageListenerState::CloseTransport
+
+                    if self.client_state.read(false) == ClientState::TransportClosed {
+                        // This is the case if the transport intitated the close by pushing to
+                        // the transport_errors queue. In that case, the contract is to *not*
+                        // call close() on it. Once we return, all client tasks should be stopped.
+                        return Ok(Async::Ready(()));
+                    } else {
+                        self.transport_close_future = Some(self.task_tracker.close_transport());
+                        ProtocolMessageListenerState::CloseTransport
+                    }
                 }
 
                 ProtocolMessageListenerState::CloseTransport => {
                     match self.transport_close_future.as_mut().unwrap().poll() {
                         Ok(Async::NotReady) => {
                             pending = true;
+                            debug!("ProtocolMessageListener waiting for Transport::CloseFuture to finish");
                             ProtocolMessageListenerState::CloseTransport
                         }
                         Ok(Async::Ready(_)) => return Ok(Async::Ready(())),
@@ -279,7 +301,7 @@ where
 
                             let (stop_sender, receiver) = oneshot::channel();
                             let task_tracker = ClientTaskTracker::new(self.sender.take().unwrap(), stop_sender);
-                            let client_state = Arc::new(RwLock::new(ClientState::Established));
+                            let client_state = PollableValue::new(ClientState::Established);
 
                             let proto_msg_listener = ProtocolMessageListener {
                                 values: self.received.clone(),

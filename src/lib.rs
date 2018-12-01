@@ -251,6 +251,16 @@ impl TransportableValue {
 /// It is not the responsibility of the transport to associate meaning with any received messages.
 /// For example, a transport should *not* close itself upon receiving an ABORT message. It should also
 /// *not* look for or even be aware of out-of-order messages.
+///
+/// If a transport's underlying connection fatally fails or is lost, transports should inform their
+/// client by adding to the "errors" list in the ReceivedValues. Transport implementations should not
+/// attempt to transparently recreate the connection. The WAMP protocol defines a WAMP session's
+/// lifetime as a subset of the underlying connection's lifetime, so the WAMP session will have to be
+/// re-established in that case.
+/// 
+/// If a message is pushed to the `transport_errors` queue in [`ReceivedValues`], `close()` will *NOT*
+/// be called on the transport. The transport should clean up all of its resources independently in
+/// that scenario.
 pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> + Send {
     /// The type of future returned when this transport opens a connection.
     type ConnectFuture: Future<Item = Self, Error = Error> + Send;
@@ -268,6 +278,7 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> + Sen
     ///
     /// This method returns a future which, when resolved, provides the actual transport instance.
     /// It also returns a shared [`ReceivedValues`].
+    /// TODO: the client should create the ReceivedValues dictionary and pass it into connect().
     ///
     /// # Panics
     ///
@@ -324,6 +335,8 @@ pub struct ReceivedValues {
     pub goodbye: TsPollSet<rx::Goodbye>,
     /// The buffer of incoming "ERROR" messages.
     pub error: TsPollSet<rx::Error>,
+    /// The buffer of incoming fatal transport issues.
+    pub transport_errors: TsPollSet<Error>,
 
     /// The buffer of incoming "SUBSCRIBED" messages.
     #[cfg(feature = "subscriber")]
