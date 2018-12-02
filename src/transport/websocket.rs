@@ -578,7 +578,7 @@ mod tests {
         let rv = ReceivedValues::default();
         let (_sender, stop_receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
-            stream: unsafe { ::std::mem::uninitialized() },
+            stream: Arc::new(Mutex::new(None)),
             received_values: rv.clone(),
             stop_receiver,
         };
@@ -624,7 +624,7 @@ mod tests {
         let rv = ReceivedValues::default();
         let (_sender, stop_receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
-            stream: unsafe { ::std::mem::uninitialized() },
+            stream: Arc::new(Mutex::new(None)),
             received_values: rv.clone(),
             stop_receiver,
         };
@@ -678,7 +678,7 @@ mod tests {
         let rv = ReceivedValues::default();
         let (_sender, stop_receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
-            stream: unsafe { ::std::mem::uninitialized() },
+            stream: Arc::new(Mutex::new(None)),
             received_values: rv.clone(),
             stop_receiver,
         };
@@ -733,7 +733,7 @@ mod tests {
         let rv = ReceivedValues::default();
         let (_sender, receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
-            stream: unsafe { ::std::mem::uninitialized() },
+            stream: Arc::new(Mutex::new(None)),
             received_values: rv.clone(),
             stop_receiver: receiver,
         };
@@ -782,7 +782,7 @@ mod tests {
         let rv = ReceivedValues::default();
         let (_sender, receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
-            stream: unsafe { ::std::mem::uninitialized() },
+            stream: Arc::new(Mutex::new(None)),
             received_values: rv.clone(),
             stop_receiver: receiver,
         };
@@ -821,7 +821,7 @@ mod tests {
         let rv = ReceivedValues::default();
         let (_sender, receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
-            stream: unsafe { ::std::mem::uninitialized() },
+            stream: Arc::new(Mutex::new(None)),
             received_values: rv.clone(),
             stop_receiver: receiver,
         };
@@ -1021,7 +1021,7 @@ mod tests {
         let rv = ReceivedValues::default();
         let (_sender, stop_receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
-            stream: unsafe { ::std::mem::uninitialized() },
+            stream: Arc::new(Mutex::new(None)),
             received_values: rv.clone(),
             stop_receiver,
         };
