@@ -79,6 +79,8 @@ impl Transport for WebsocketTransport {
         let future = match ClientBuilder::new(url) {
             Ok(builder) => Either::A(
                 builder
+                    // TODO: for now, we only support json; also support msgpack? config?
+                    .add_protocols(vec!["wamp.2.json"])
                     .async_connect_insecure(&reactor::Handle::current())
                     .map_err(|e| e.into()),
             ),
