@@ -277,14 +277,12 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> + Sen
     /// # Return Value
     ///
     /// This method returns a future which, when resolved, provides the actual transport instance.
-    /// It also returns a shared [`ReceivedValues`].
-    /// TODO: the client should create the ReceivedValues dictionary and pass it into connect().
     ///
     /// # Panics
     ///
     /// This method may panic if not called under a tokio runtime. It should handle failures by returning
     /// [`Err`] from the appropriate future, or an Err() result for synchronous errors.
-    fn connect(url: &str) -> ConnectResult<Self>;
+    fn connect(url: &str, rv: ReceivedValues) -> Self::ConnectFuture;
 
     /// Spawns a long-running task which will listen for events and forward them to the
     /// [`ReceivedValues`] returned by the [`connect`] method. Multiple calls to this method
@@ -306,14 +304,6 @@ pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> + Sen
     /// Closes whatever connection this has open and stops listening for incoming messages.
     /// Calling this before `listen` is undefined behavior.
     fn close(&mut self) -> Self::CloseFuture;
-}
-
-/// The result of connecting to a channel.
-pub struct ConnectResult<T: Transport> {
-    /// The task which will eventually provide the actual Transport object.
-    pub future: T::ConnectFuture,
-    /// The queue of incoming messages and outgoing commands to the message handling task.
-    pub received_values: ReceivedValues,
 }
 
 /// A thread-safe pollable set - convenience typedef to save on typing. This effectively acts

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use failure::Error;
 use futures::{
-    future::{self, Future},
+    future::{self, Either, Future},
     sink::Sink,
     stream::{SplitSink, SplitStream, Stream},
     sync::oneshot,
@@ -25,7 +25,7 @@ use proto::{
     TxMessage,
 };
 use {
-    ConnectResult, GlobalScope, Id, ReceivedValues, RouterScope, SessionScope, Transport,
+    GlobalScope, Id, ReceivedValues, RouterScope, SessionScope, Transport,
     TransportableValue, Uri,
 };
 
@@ -76,23 +76,18 @@ impl Transport for WebsocketTransport {
     type ConnectFuture = WebsocketTransportConnectFuture;
     type CloseFuture = WebsocketTransportCloseFuture;
 
-    fn connect(url: &str) -> ConnectResult<Self> {
-        let received_values = ReceivedValues::default();
-
-        let future: Box<Future<Item = _, Error = Error> + Send> = match ClientBuilder::new(url) {
-            Ok(builder) => Box::new(
+    fn connect(url: &str, received_values: ReceivedValues) -> WebsocketTransportConnectFuture {
+        let future = match ClientBuilder::new(url) {
+            Ok(builder) => Either::A(
                 builder
                     .async_connect_insecure(&reactor::Handle::current())
-                    .map_err(|e| e.into()),
+                    .map_err(|e| e.into())
             ),
-            Err(e) => Box::new(future::err(e.into())),
+            Err(e) => Either::B(future::err(e.into())),
         };
 
-        ConnectResult {
-            future: WebsocketTransportConnectFuture {
-                future,
-                received_values: Some(received_values.clone()),
-            },
+        WebsocketTransportConnectFuture {
+            future: Box::new(future),
             received_values,
         }
     }
@@ -420,8 +415,9 @@ fn json_to_tv(value: &Value) -> Option<TransportableValue> {
 
 /// Returned by [`WebsocketTransport::connect`]; resolves to a [`WebsocketTransport`].
 pub struct WebsocketTransportConnectFuture {
+    // Sadly we have to box this value, since it's type isn't nameable.
     future: Box<Future<Item = (Client<TcpStream>, HeaderMap), Error = Error> + Send>,
-    received_values: Option<ReceivedValues>,
+    received_values: ReceivedValues,
 }
 impl Future for WebsocketTransportConnectFuture {
     type Item = WebsocketTransport;
@@ -437,11 +433,7 @@ impl Future for WebsocketTransportConnectFuture {
                 return Ok(Async::Ready(WebsocketTransport {
                     client: Some(client),
                     stream: Arc::new(Mutex::new(Some(stream))),
-                    received_values: Some(
-                        self.received_values
-                            .take()
-                            .expect("invalid WebsocketTransportConnectFuture state"),
-                    ),
+                    received_values: Some(self.received_values.clone()),
                     listener_stop_sender: None,
                 }));
             }

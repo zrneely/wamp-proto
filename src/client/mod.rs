@@ -14,7 +14,7 @@ use tokio::timer::Delay;
 use error::WampError;
 use pollable::PollableValue;
 use {
-    ConnectResult, GlobalScope, Id, ReceivedValues, RouterScope, Transport,
+    GlobalScope, Id, ReceivedValues, RouterScope, Transport,
     TransportableValue as TV, Uri,
 };
 
@@ -215,10 +215,8 @@ impl<T: Transport> Client<T> {
             panic_on_drop_while_open,
             user_agent,
         } = config;
-        let ConnectResult {
-            future,
-            received_values,
-        } = T::connect(url);
+        let received_values = ReceivedValues::default();
+        let future = T::connect(url, received_values.clone());
 
         future.and_then(move |transport| {
             ops::initialize::InitializeFuture::new(

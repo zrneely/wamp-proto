@@ -22,10 +22,11 @@ fn integration_1() {
 
     let mut client_config =
         ClientConfig::new("ws://127.0.0.1:9001", Uri::strict("org.test").unwrap());
-    // TODO: clean shutdown on timeout or network error from transport
     client_config.timeout = Duration::from_secs(60 * 10);
     client_config.shutdown_timeout = Duration::from_secs(60 * 10);
     client_config.user_agent = Some("WampProto Test".into());
+
+    // TODO: listen for broken conenctions before InitializeFuture finishes
 
     let future = Client::<WebsocketTransport>::new(client_config)
         .and_then(|mut client| {
