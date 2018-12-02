@@ -23,6 +23,9 @@ mod ops {
     pub mod subscribe;
     #[cfg(feature = "subscriber")]
     pub mod unsubscribe;
+
+    #[cfg(feature = "publisher")]
+    pub mod publish;
 }
 
 // helper for most operations
@@ -256,12 +259,16 @@ impl<T: Transport> Client<T> {
     //    unimplemented!()
     //}
 
-    //#[cfg(feature = "publisher")]
-    ///// Publishes a message. The returned future will complete as soon as the protocol-level work
-    ///// of sending the message is complete.
-    //fn publish(&mut self, topic: Uri, broadcast: Broadcast) -> impl Future<Item=(), Error=Error> {
-    //    unimplemented!()
-    //}
+    /// Publishes a message. The returned future will complete as soon as the protocol-level work
+    /// of sending the message is complete.
+    #[cfg(feature = "publisher")]
+    fn publish(&mut self, topic: Uri, broadcast: Broadcast) -> impl Future<Item=(), Error=Error> {
+        if !self.router_capabilities.broker {
+            Either::A(future::err(WampError::RouterSupportMissing.into()))
+        } else {
+            Either::B(ops::publish::PublishFuture::new(self, topic, broadcast))
+        }
+    }
 
     //#[cfg(feature = "publisher")]
     ///// Publishes a message, requesting acknowledgement. The returned future will not complete
