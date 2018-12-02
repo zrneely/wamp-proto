@@ -207,6 +207,7 @@ impl WebsocketTransportListener {
                         rx::Goodbye::MSG_CODE => self.handle_goodbye(&vals[1..]),
                         rx::Subscribed::MSG_CODE => self.handle_subscribed(&vals[1..]),
                         rx::Unsubscribed::MSG_CODE =>  self.handle_unsubscribed(&vals[1..]),
+                        rx::Event::MSG_CODE => self.handle_event(&vals[1..]),
 
                         _ => {
                             warn!("Received unknown message code {}", code);
@@ -229,22 +230,19 @@ impl WebsocketTransportListener {
             return;
         }
 
-        let session: Id<GlobalScope>;
-        let details: HashMap<String, TransportableValue>;
-
-        if let Some(session_id) = msg[0].as_u64() {
-            session = Id::<GlobalScope>::from_raw_value(session_id);
+        let session = if let Some(session_id) = msg[0].as_u64() {
+            Id::<GlobalScope>::from_raw_value(session_id)
         } else {
             warn!("Bad WELCOME message session ID {:?}", msg[0]);
             return;
-        }
+        };
 
-        if let Some(TransportableValue::Dict(details_)) = json_to_tv(&msg[1]) {
-            details = details_;
+        let details = if let Some(TransportableValue::Dict(details)) = json_to_tv(&msg[1]) {
+            details
         } else {
             warn!("Bad WELCOME message details {:?}", msg[1]);
             return;
-        }
+        };
 
         debug!("Adding WELCOME message: {:?}, {:?}", session, details);
         self.received_values
@@ -259,19 +257,16 @@ impl WebsocketTransportListener {
             return;
         }
 
-        let details: HashMap<String, TransportableValue>;
-        let reason: Uri;
-
-        if let Some(TransportableValue::Dict(details_)) = json_to_tv(&msg[0]) {
-            details = details_;
+        let details = if let Some(TransportableValue::Dict(details)) = json_to_tv(&msg[0]) {
+            details
         } else {
             warn!("Bad ABORT message details {:?}", msg[0]);
             return;
-        }
+        };
 
-        if let Some(uri_str) = msg[1].as_str() {
-            if let Some(reason_) = Uri::relaxed(uri_str) {
-                reason = reason_;
+        let reason = if let Some(uri_str) = msg[1].as_str() {
+            if let Some(reason) = Uri::relaxed(uri_str) {
+                reason
             } else {
                 warn!("Bad URI in ABORT message reason {:?}", msg[1]);
                 return;
@@ -279,7 +274,7 @@ impl WebsocketTransportListener {
         } else {
             warn!("Bad ABORT message reason {:?}", msg[1]);
             return;
-        }
+        };
 
         debug!("Adding ABORT message: {:?} {:?}", details, reason);
         self.received_values
@@ -294,19 +289,16 @@ impl WebsocketTransportListener {
             return;
         }
 
-        let details: HashMap<String, TransportableValue>;
-        let reason: Uri;
-
-        if let Some(TransportableValue::Dict(details_)) = json_to_tv(&msg[0]) {
-            details = details_;
+        let details = if let Some(TransportableValue::Dict(details)) = json_to_tv(&msg[0]) {
+            details
         } else {
             warn!("Bad GOODBYE message details {:?}", msg[0]);
             return;
-        }
+        };
 
-        if let Some(uri_str) = msg[1].as_str() {
-            if let Some(reason_) = Uri::relaxed(uri_str) {
-                reason = reason_;
+        let reason = if let Some(uri_str) = msg[1].as_str() {
+            if let Some(reason) = Uri::relaxed(uri_str) {
+                reason
             } else {
                 warn!("Bad URI in GOODBYE message reason {:?}", msg[1]);
                 return;
@@ -314,7 +306,7 @@ impl WebsocketTransportListener {
         } else {
             warn!("Bad GOODBYE message reason {:?}", msg[1]);
             return;
-        }
+        };
 
         debug!("Adding GOODBYE message: {:?} {:?}", details, reason);
         self.received_values
@@ -329,22 +321,19 @@ impl WebsocketTransportListener {
             return;
         }
 
-        let request: Id<SessionScope>;
-        let subscription: Id<RouterScope>;
-
-        if let Some(request_id_raw) = msg[0].as_u64() {
-            request = Id::<SessionScope>::from_raw_value(request_id_raw);
+        let request = if let Some(request_id_raw) = msg[0].as_u64() {
+            Id::<SessionScope>::from_raw_value(request_id_raw)
         } else {
             warn!("Bad SUBSCRIBED message request ID {:?}", msg[0]);
             return;
-        }
+        };
 
-        if let Some(subscription_id_raw) = msg[1].as_u64() {
-            subscription = Id::<RouterScope>::from_raw_value(subscription_id_raw);
+        let subscription = if let Some(subscription_id_raw) = msg[1].as_u64() {
+            Id::<RouterScope>::from_raw_value(subscription_id_raw)
         } else {
             warn!("Bad SUBSCRIBED message subscription ID {:?}", msg[1]);
             return;
-        }
+        };
 
         debug!(
             "Adding SUBSCRIBED message: {:?} {:?}",
@@ -364,15 +353,13 @@ impl WebsocketTransportListener {
             warn!("Bad UNSUBSCRIBED message length");
             return;
         }
-
-        let request: Id<SessionScope>;
         
-        if let Some(request_id_raw) = msg[0].as_u64() {
-            request = Id::<SessionScope>::from_raw_value(request_id_raw);
+        let request = if let Some(request_id_raw) = msg[0].as_u64() {
+            Id::<SessionScope>::from_raw_value(request_id_raw)
         } else {
             warn!("Bad UNSUBSCRIBED message request ID {:?}", msg[0]);
             return;
-        }
+        };
 
         debug!(
             "Adding UNSUBSCRIBED message: {:?}",
@@ -383,6 +370,68 @@ impl WebsocketTransportListener {
             .lock()
             .insert(rx::Unsubscribed {
                 request,
+            });
+    }
+
+    fn handle_event(&mut self, msg: &[Value]) {
+        if msg.len() < 3 || msg.len() > 5 {
+            warn!("Bad EVENT message length");
+            return;
+        }
+
+        let subscription = if let Some(subscription_id) = msg[0].as_u64() {
+            Id::<RouterScope>::from_raw_value(subscription_id)
+        } else {
+            warn!("Bad EVENT subscription ID {:?}", msg[0]);
+            return;
+        };
+
+        let publication = if let Some(publication_id) = msg[1].as_u64() {
+            Id::<GlobalScope>::from_raw_value(publication_id)
+        } else {
+            warn!("Bad EVENT publication ID {:?}", msg[1]);
+            return;
+        };
+
+        let details = if let Some(TransportableValue::Dict(details)) = json_to_tv(&msg[2]) {
+            details
+        } else {
+            warn!("Bad EVENT details {:?}", msg[2]);
+            return;
+        };
+
+        let arguments = if msg.len() > 3 {
+            if let Some(TransportableValue::List(arguments)) = json_to_tv(&msg[3]) {
+                Some(arguments)
+            } else {
+                warn!("Bad EVENT arguments {:?}", msg[3]);
+                return;
+            }
+        } else {
+            None
+        };
+
+        let arguments_kw = if msg.len() > 4 {
+            if let Some(TransportableValue::Dict(arguments_kw)) = json_to_tv(&msg[4]) {
+                Some(arguments_kw)
+            } else {
+                warn!("Bad EVENT arguments_kw {:?}", msg[4]);
+                return;
+            }
+        } else {
+            None
+        };
+
+        debug!("Adding EVENT message: {:?} {:?} {:?} {:?} {:?}", subscription, publication, details, arguments, arguments_kw);
+        self.received_values
+            .event
+            .lock()
+            .insert(rx::Event {
+                subscription,
+                publication,
+                details,
+                arguments,
+                arguments_kw,
             });
     }
 }
@@ -516,6 +565,15 @@ mod tests {
         );
         assert_eq!(None, json_to_tv(&json!(-1)));
         assert_eq!(None, json_to_tv(&json!(-3)));
+    }
+
+    #[test]
+    fn json_to_tv_test_array() {
+        assert_eq!(Some(TransportableValue::List(vec![
+            TransportableValue::Integer(1),
+            TransportableValue::Integer(2),
+            TransportableValue::String("asdf".into())
+        ])), json_to_tv(&json!([1, 2, "asdf"])));
     }
 
     #[test]
@@ -758,6 +816,151 @@ mod tests {
 
         println!("Scenario 3: Too many arguments");
         listener.handle_unsubscribed(&[json!(12345), json!(23456)]);
+        assert_eq!(0, rv.len());
+    }
+
+    #[test]
+    fn handle_event_test() {
+        let rv = ReceivedValues::default();
+        let (_sender, receiver) = oneshot::channel();
+        let mut listener = WebsocketTransportListener {
+            stream: unsafe { ::std::mem::uninitialized() },
+            received_values: rv.clone(),
+            stop_receiver: receiver,
+        };
+
+        println!("Scenario 0: happy path (no arguments)");
+        listener.handle_event(&[json!(12345), json!(23456), json!({"x": "foo", "y": true})]);
+        assert_eq!(1, rv.event.lock().len());
+        assert_eq!(1, rv.len());
+        let query = poll_fn(|| {
+            let val = try_ready!({
+                let res: Result<_, &'static str> = Ok(rv.event.lock().poll_take(|_| true));
+                res
+            });
+            if Id::<RouterScope>::from_raw_value(12345) != val.subscription {
+                return Err(format!("subscription ID {:?} did not match", val.subscription));
+            }
+            if Id::<GlobalScope>::from_raw_value(23456) != val.publication {
+                return Err(format!("publication ID {:?} did not match", val.publication));
+            }
+            if 2 != val.details.len() {
+                return Err(format!("details map {:?} had wrong number of elements", val.details));   
+            }
+            if val.arguments.is_some() {
+                return Err(format!("arguments were present: {:?}", val.arguments));
+            }
+            if val.arguments_kw.is_some() {
+                return Err(format!("arguments_kw were present: {:?}", val.arguments_kw));
+            }
+            Ok(Async::Ready(()))
+        });
+        assert_eq!(current_thread::block_on_all(query), Ok(()));
+
+        println!("Scenario 1: happy path (positional arguments)");
+        listener.handle_event(&[json!(12345), json!(23456), json!({"x": "foo", "y": true}), json!([1, "foobar"])]);
+        assert_eq!(1, rv.event.lock().len());
+        assert_eq!(1, rv.len());
+        let query = poll_fn(|| {
+            let val = try_ready!({
+                let res: Result<_, &'static str> = Ok(rv.event.lock().poll_take(|_| true));
+                res
+            });
+            if Id::<RouterScope>::from_raw_value(12345) != val.subscription {
+                return Err(format!("subscription ID {:?} did not match", val.subscription));
+            }
+            if Id::<GlobalScope>::from_raw_value(23456) != val.publication {
+                return Err(format!("publication ID {:?} did not match", val.publication));
+            }
+            if 2 != val.details.len() {
+                return Err(format!("details map {:?} had wrong number of elements", val.details));   
+            }
+            if let Some(arr) = val.arguments {
+                if arr.len() != 2 {
+                    return Err(format!("arguments had wrong length {:?}", arr));
+                }
+                if arr[0] != TransportableValue::Integer(1) || arr[1] != TransportableValue::String("foobar".into()) {
+                    return Err(format!("arguments had wrong values {:?}", arr));
+                }
+            } else {
+                return Err(format!("arguments did not exist"));
+            }
+            if val.arguments_kw.is_some() {
+                return Err(format!("arguments_kw were present: {:?}", val.arguments_kw));
+            }
+            Ok(Async::Ready(()))
+        });
+        assert_eq!(current_thread::block_on_all(query), Ok(()));
+        
+        println!("Scenario 2: happy path (named arguments)");
+        listener.handle_event(&[json!(12345), json!(23456), json!({"x": "foo", "y": true}), json!([1, "foobar"]), json!({"a": 1, "b": 2})]);
+        assert_eq!(1, rv.event.lock().len());
+        assert_eq!(1, rv.len());
+        let query = poll_fn(|| {
+            let val = try_ready!({
+                let res: Result<_, &'static str> = Ok(rv.event.lock().poll_take(|_| true));
+                res
+            });
+            if Id::<RouterScope>::from_raw_value(12345) != val.subscription {
+                return Err(format!("subscription ID {:?} did not match", val.subscription));
+            }
+            if Id::<GlobalScope>::from_raw_value(23456) != val.publication {
+                return Err(format!("publication ID {:?} did not match", val.publication));
+            }
+            if 2 != val.details.len() {
+                return Err(format!("details map {:?} had wrong number of elements", val.details));   
+            }
+            if let Some(arr) = val.arguments {
+                if arr.len() != 2 {
+                    return Err(format!("arguments had wrong length {:?}", arr));
+                }
+                if arr[0] != TransportableValue::Integer(1) || arr[1] != TransportableValue::String("foobar".into()) {
+                    return Err(format!("arguments had wrong values {:?}", arr));
+                }
+            } else {
+                return Err(format!("arguments did not exist"));
+            }
+            if let Some(dict) = val.arguments_kw {
+                if dict.len() != 2 {
+                    return Err(format!("arguments_kw had wrong size"));
+                }
+                if dict.get("a") != Some(&TransportableValue::Integer(1)) {
+                    return Err(format!("arguments_kw had wrong value for a"));
+                }
+                if dict.get("b") != Some(&TransportableValue::Integer(2)) {
+                    return Err(format!("arguments_kw had wrong value for b"));
+                }
+            }
+            Ok(Async::Ready(()))
+        });
+        assert_eq!(current_thread::block_on_all(query), Ok(()));
+
+        println!("Scenario 3: subscription is not a number");
+        listener.handle_event(&[json!("foobar"), json!(23456), json!({})]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 4: publication is not a number");
+        listener.handle_event(&[json!(12345), json!("foobar"), json!({})]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 5: details is not a dict");
+        listener.handle_event(&[json!(12345), json!(23456), json!("foobar")]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 6: arguments is not a list");
+        listener.handle_event(&[json!(12345), json!(23456), json!({}), json!("not a list")]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 7: arguments_kw is not a list");
+        listener.handle_event(&[json!(12345), json!(23456), json!({}), json!([]), json!("not a dict")]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 8: too many arguments");
+        listener.handle_event(&[json!(12345), json!(23456), json!({}), json!([]), json!({}), json!("foobar")]);
+        assert_eq!(0, rv.len());
+
+        println!("Scenario 9: not enough arguments");
+        listener.handle_event(&[json!(12345), json!(23456)]);
         assert_eq!(0, rv.len());
     }
 
