@@ -35,7 +35,7 @@ fn integration_1() {
                         "got broadcast: {:?}, {:?}",
                         broadcast.arguments, broadcast.arguments_kw
                     );
-                    Box::new(futures::future::ok(()))
+                    futures::future::ok(())
                 });
 
             *SAVED_CLIENT.lock().unwrap() = Some(client);

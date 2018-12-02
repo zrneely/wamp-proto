@@ -40,10 +40,6 @@ fn check_for_timeout(timeout: &mut Delay) -> Result<(), Error> {
     Ok(())
 }
 
-struct BroadcastHandler {
-    target: Box<Fn(Broadcast) -> Box<Future<Item = (), Error = Error> + Send> + Send>,
-}
-
 // The states a client can be in, according to the WAMP specification.
 // Clients are not made available to consumers of this library until they reach
 // their initial "Established" state.
@@ -307,13 +303,14 @@ impl<T: Transport> Client<T> {
     /// * If the router does not acknowledge the subscription within the client timeout period, the returned
     /// future will resolve with an error.
     #[cfg(feature = "subscriber")]
-    pub fn subscribe<F>(
+    pub fn subscribe<F, R>(
         &mut self,
         topic: Uri,
         handler: F,
     ) -> impl Future<Item = Id<RouterScope>, Error = Error>
     where
-        F: 'static + Fn(Broadcast) -> Box<Future<Item = (), Error = Error> + Send> + Send,
+        F: Fn(Broadcast) -> R + Send + 'static,
+        R: Future<Item = (), Error = Error> + Send + 'static,
     {
         if !self.router_capabilities.broker {
             Either::A(future::err(WampError::RouterSupportMissing.into()))
@@ -321,9 +318,7 @@ impl<T: Transport> Client<T> {
             Either::B(ops::subscribe::SubscriptionFuture::new(
                 self,
                 topic,
-                BroadcastHandler {
-                    target: Box::new(handler),
-                },
+                handler,
             ))
         }
     }

@@ -80,6 +80,8 @@ pub mod known_uri {
     }
 }
 
+// TODO: allow parsing wamp. urls if they come from the router
+
 /// An RFC3989 URI.
 ///
 /// These are used to identify topics, procedures, and errors in WAMP. A URI

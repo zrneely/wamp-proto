@@ -6,7 +6,7 @@ use failure::Error;
 use futures::{sync::oneshot, Async, AsyncSink, Future};
 use tokio::timer::Delay;
 
-use client::{Broadcast, BroadcastHandler, Client, ClientState, ClientTaskTracker};
+use client::{Broadcast, Client, ClientState, ClientTaskTracker};
 use error::WampError;
 use pollable::PollableValue;
 use proto::TxMessage;
@@ -14,13 +14,21 @@ use {Id, ReceivedValues, RouterScope, SessionScope, Transport, Uri};
 
 // The future (task) that listens for new events published to a channel we're
 // subscribed to.
-struct SubscriptionListener {
+struct SubscriptionListener<F, R>
+where
+    F: Fn(Broadcast) -> R + Send + 'static,
+    R: Future<Item = (), Error = Error> + Send + 'static,
+{
     values: ReceivedValues,
     stop_receiver: oneshot::Receiver<()>,
     subscription_id: Id<RouterScope>,
-    handler: BroadcastHandler,
+    handler: F,
 }
-impl Future for SubscriptionListener {
+impl<F, R> Future for SubscriptionListener<F, R>
+where
+    F: Fn(Broadcast) -> R + Send + 'static,
+    R: Future<Item = (), Error = Error> + Send + 'static
+{
     type Item = ();
     type Error = ();
 
@@ -52,7 +60,7 @@ impl Future for SubscriptionListener {
 
                     // Spawn the event handler on its own task. We can't do it as a part of this function,
                     // or handler-produced futures will stop executing if the subscription is cancelled.
-                    tokio::spawn((self.handler.target)(Broadcast {
+                    tokio::spawn((self.handler)(Broadcast {
                         arguments: event.arguments.unwrap_or_else(|| Vec::new()),
                         arguments_kw: event.arguments_kw.unwrap_or_else(|| HashMap::new()),
                     }).map_err(|err| {
@@ -76,11 +84,16 @@ enum SubscriptionFutureState {
 }
 
 /// A future representing a completed subscription.
-pub(in client) struct SubscriptionFuture<T: Transport> {
+pub(in client) struct SubscriptionFuture<T, F, R>
+where
+    T: Transport,
+    F: Fn(Broadcast) -> R + Send + 'static,
+    R: Future<Item = (), Error = Error> + Send + 'static,
+{
     state: SubscriptionFutureState,
 
     topic: Uri,
-    handler: Option<BroadcastHandler>,
+    handler: Option<F>,
     request_id: Id<SessionScope>,
     timeout: Delay,
 
@@ -88,8 +101,13 @@ pub(in client) struct SubscriptionFuture<T: Transport> {
     client_state: PollableValue<ClientState>,
     task_tracker: Arc<ClientTaskTracker<T>>,
 }
-impl<T: Transport> SubscriptionFuture<T> {
-    pub fn new(client: &Client<T>, topic: Uri, handler: BroadcastHandler) -> Self {
+impl<T, F, R> SubscriptionFuture<T, F, R>
+where
+    T: Transport,
+    F: Fn(Broadcast) -> R + Send + 'static,
+    R: Future<Item = (), Error = Error> + Send + 'static
+{
+    pub fn new(client: &Client<T>, topic: Uri, handler: F) -> Self {
         let request_id = Id::<SessionScope>::next();
         SubscriptionFuture {
             state: SubscriptionFutureState::StartSendSubscribe(Some(TxMessage::Subscribe {
@@ -109,7 +127,12 @@ impl<T: Transport> SubscriptionFuture<T> {
         }
     }
 }
-impl<T: Transport> Future for SubscriptionFuture<T> {
+impl<T, F, R> Future for SubscriptionFuture<T, F, R>
+where
+    T: Transport,
+    F: Fn(Broadcast) -> R + Send + 'static,
+    R: Future<Item = (), Error = Error> + Send + 'static,
+{
     type Item = Id<RouterScope>;
     type Error = Error;
 
