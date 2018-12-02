@@ -46,23 +46,22 @@ fn integration_1() {
             // terminate gracefully and this program should finish. Comment the and_then and map calls
             // to simulate that.
 
-            }).and_then(|subscription| {
-                println!("got subscription {:?}", subscription);
-                // println!("closing client");
-                // SAVED_CLIENT.lock().unwrap().as_mut().unwrap().close(Uri::raw("wamp.error.goodbye".to_string()))
-                
-                println!("Unsubscribing");
-                SAVED_CLIENT.lock().unwrap().as_mut().unwrap().unsubscribe(subscription)
-            }).and_then(|_| {
-                println!("unsubscribed! closing client");
-                SAVED_CLIENT.lock().unwrap().as_mut().unwrap().close(Uri::raw("wamp.error.goodbye".to_string()))
-            }).map(|_| {
-                println!("client closed!");
+            // }).and_then(|subscription| {
+            // println!("got subscription {:?}", subscription);
+            // println!("closing client");
+            // SAVED_CLIENT.lock().unwrap().as_mut().unwrap().close(Uri::raw("wamp.error.goodbye".to_string()))
 
-                // Comment these two lines to simulate not dropping the client
-                SAVED_CLIENT.lock().unwrap().take();
-                println!("client dropped!");
+            // println!("Unsubscribing");
+            // SAVED_CLIENT.lock().unwrap().as_mut().unwrap().unsubscribe(subscription)
+            // }).and_then(|_| {
+            //     println!("unsubscribed! closing client");
+            //     SAVED_CLIENT.lock().unwrap().as_mut().unwrap().close(Uri::raw("wamp.error.goodbye".to_string()))
+            // }).map(|_| {
+            //     println!("client closed!");
 
+            // Comment these two lines to simulate not dropping the client
+            // SAVED_CLIENT.lock().unwrap().take();
+            // println!("client dropped!");
         }).map_err(|e| println!("error: {:?}", e))
         .map(|_| ());
 

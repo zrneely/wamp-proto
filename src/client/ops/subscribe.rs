@@ -27,7 +27,7 @@ where
 impl<F, R> Future for SubscriptionListener<F, R>
 where
     F: Fn(Broadcast) -> R + Send + 'static,
-    R: Future<Item = (), Error = Error> + Send + 'static
+    R: Future<Item = (), Error = Error> + Send + 'static,
 {
     type Item = ();
     type Error = ();
@@ -60,13 +60,15 @@ where
 
                     // Spawn the event handler on its own task. We can't do it as a part of this function,
                     // or handler-produced futures will stop executing if the subscription is cancelled.
-                    tokio::spawn((self.handler)(Broadcast {
-                        arguments: event.arguments.unwrap_or_else(|| Vec::new()),
-                        arguments_kw: event.arguments_kw.unwrap_or_else(|| HashMap::new()),
-                    }).map_err(|err| {
-                        warn!("Event handler produced error: {:?}", err);
-                        ()
-                    }));
+                    tokio::spawn(
+                        (self.handler)(Broadcast {
+                            arguments: event.arguments.unwrap_or_else(|| Vec::new()),
+                            arguments_kw: event.arguments_kw.unwrap_or_else(|| HashMap::new()),
+                        }).map_err(|err| {
+                            warn!("Event handler produced error: {:?}", err);
+                            ()
+                        }),
+                    );
                 }
 
                 // Nothing available yet
@@ -105,7 +107,7 @@ impl<T, F, R> SubscriptionFuture<T, F, R>
 where
     T: Transport,
     F: Fn(Broadcast) -> R + Send + 'static,
-    R: Future<Item = (), Error = Error> + Send + 'static
+    R: Future<Item = (), Error = Error> + Send + 'static,
 {
     pub fn new(client: &Client<T>, topic: Uri, handler: F) -> Self {
         let request_id = Id::<SessionScope>::next();
@@ -207,7 +209,8 @@ where
                             "Subscribed to {:?} (ID: {:?})",
                             self.topic, msg.subscription
                         );
-                        self.task_tracker.track_subscription(msg.subscription, sender);
+                        self.task_tracker
+                            .track_subscription(msg.subscription, sender);
                         return Ok(Async::Ready(msg.subscription));
                     }
                 },

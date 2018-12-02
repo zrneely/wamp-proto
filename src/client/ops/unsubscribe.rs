@@ -57,10 +57,7 @@ impl<T: Transport> Future for UnsubscriptionFuture<T> {
             match self.client_state.read(true) {
                 ClientState::Established => {}
                 ref state => {
-                    warn!(
-                        "UnsubscribeFuture with unexpected client state {:?}",
-                        state
-                    );
+                    warn!("UnsubscribeFuture with unexpected client state {:?}", state);
                     return Err(WampError::InvalidClientState.into());
                 }
             }
@@ -111,7 +108,7 @@ impl<T: Transport> Future for UnsubscriptionFuture<T> {
                         self.task_tracker.stop_subscription(&self.subscription);
                         return Ok(Async::Ready(()));
                     }
-                }
+                },
             };
 
             if pending {

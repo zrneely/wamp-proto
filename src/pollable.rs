@@ -15,7 +15,10 @@ pub struct PollableValue<T: Copy> {
     val: Arc<RwLock<T>>,
     tasks: Arc<Mutex<Vec<Task>>>,
 }
-impl<T> PollableValue<T> where T: Copy {
+impl<T> PollableValue<T>
+where
+    T: Copy,
+{
     /// Creates a new pollable value.
     pub fn new(value: T) -> Self {
         PollableValue {
@@ -49,7 +52,7 @@ impl<T> PollableValue<T> where T: Copy {
         let mut lock = self.tasks.lock();
         for task in lock.drain(..) {
             task.notify();
-        }       
+        }
     }
 }
 

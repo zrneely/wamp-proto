@@ -257,7 +257,7 @@ impl TransportableValue {
 /// attempt to transparently recreate the connection. The WAMP protocol defines a WAMP session's
 /// lifetime as a subset of the underlying connection's lifetime, so the WAMP session will have to be
 /// re-established in that case.
-/// 
+///
 /// If a message is pushed to the `transport_errors` queue in [`ReceivedValues`], `close()` will *NOT*
 /// be called on the transport. The transport should clean up all of its resources independently in
 /// that scenario.

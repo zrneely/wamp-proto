@@ -84,13 +84,15 @@ where
                 }
 
                 // Step 2: Wait for the sender's message queue to empty. If it's not empty, return NotReady.
-                CloseFutureState::SendGoodbye => match self.task_tracker.get_sender().lock().poll_complete()? {
-                    Async::NotReady => {
-                        pending = true;
-                        CloseFutureState::SendGoodbye
+                CloseFutureState::SendGoodbye => {
+                    match self.task_tracker.get_sender().lock().poll_complete()? {
+                        Async::NotReady => {
+                            pending = true;
+                            CloseFutureState::SendGoodbye
+                        }
+                        Async::Ready(_) => CloseFutureState::WaitGoodbye,
                     }
-                    Async::Ready(_) => CloseFutureState::WaitGoodbye,
-                },
+                }
 
                 // Step 3: Wait for the goodbye response from the router.
                 CloseFutureState::WaitGoodbye => {

@@ -25,8 +25,7 @@ use proto::{
     TxMessage,
 };
 use {
-    GlobalScope, Id, ReceivedValues, RouterScope, SessionScope, Transport,
-    TransportableValue, Uri,
+    GlobalScope, Id, ReceivedValues, RouterScope, SessionScope, Transport, TransportableValue, Uri,
 };
 
 /// An implementation of a websocket-based WAMP Transport.
@@ -81,7 +80,7 @@ impl Transport for WebsocketTransport {
             Ok(builder) => Either::A(
                 builder
                     .async_connect_insecure(&reactor::Handle::current())
-                    .map_err(|e| e.into())
+                    .map_err(|e| e.into()),
             ),
             Err(e) => Either::B(future::err(e.into())),
         };
@@ -206,7 +205,7 @@ impl WebsocketTransportListener {
                         rx::Abort::MSG_CODE => self.handle_abort(&vals[1..]),
                         rx::Goodbye::MSG_CODE => self.handle_goodbye(&vals[1..]),
                         rx::Subscribed::MSG_CODE => self.handle_subscribed(&vals[1..]),
-                        rx::Unsubscribed::MSG_CODE =>  self.handle_unsubscribed(&vals[1..]),
+                        rx::Unsubscribed::MSG_CODE => self.handle_unsubscribed(&vals[1..]),
                         rx::Event::MSG_CODE => self.handle_event(&vals[1..]),
 
                         _ => {
@@ -353,7 +352,7 @@ impl WebsocketTransportListener {
             warn!("Bad UNSUBSCRIBED message length");
             return;
         }
-        
+
         let request = if let Some(request_id_raw) = msg[0].as_u64() {
             Id::<SessionScope>::from_raw_value(request_id_raw)
         } else {
@@ -361,16 +360,11 @@ impl WebsocketTransportListener {
             return;
         };
 
-        debug!(
-            "Adding UNSUBSCRIBED message: {:?}",
-            request
-        );
+        debug!("Adding UNSUBSCRIBED message: {:?}", request);
         self.received_values
             .unsubscribed
             .lock()
-            .insert(rx::Unsubscribed {
-                request,
-            });
+            .insert(rx::Unsubscribed { request });
     }
 
     fn handle_event(&mut self, msg: &[Value]) {
@@ -422,17 +416,17 @@ impl WebsocketTransportListener {
             None
         };
 
-        debug!("Adding EVENT message: {:?} {:?} {:?} {:?} {:?}", subscription, publication, details, arguments, arguments_kw);
-        self.received_values
-            .event
-            .lock()
-            .insert(rx::Event {
-                subscription,
-                publication,
-                details,
-                arguments,
-                arguments_kw,
-            });
+        debug!(
+            "Adding EVENT message: {:?} {:?} {:?} {:?} {:?}",
+            subscription, publication, details, arguments, arguments_kw
+        );
+        self.received_values.event.lock().insert(rx::Event {
+            subscription,
+            publication,
+            details,
+            arguments,
+            arguments_kw,
+        });
     }
 }
 
@@ -569,11 +563,14 @@ mod tests {
 
     #[test]
     fn json_to_tv_test_array() {
-        assert_eq!(Some(TransportableValue::List(vec![
-            TransportableValue::Integer(1),
-            TransportableValue::Integer(2),
-            TransportableValue::String("asdf".into())
-        ])), json_to_tv(&json!([1, 2, "asdf"])));
+        assert_eq!(
+            Some(TransportableValue::List(vec![
+                TransportableValue::Integer(1),
+                TransportableValue::Integer(2),
+                TransportableValue::String("asdf".into())
+            ])),
+            json_to_tv(&json!([1, 2, "asdf"]))
+        );
     }
 
     #[test]
@@ -839,13 +836,22 @@ mod tests {
                 res
             });
             if Id::<RouterScope>::from_raw_value(12345) != val.subscription {
-                return Err(format!("subscription ID {:?} did not match", val.subscription));
+                return Err(format!(
+                    "subscription ID {:?} did not match",
+                    val.subscription
+                ));
             }
             if Id::<GlobalScope>::from_raw_value(23456) != val.publication {
-                return Err(format!("publication ID {:?} did not match", val.publication));
+                return Err(format!(
+                    "publication ID {:?} did not match",
+                    val.publication
+                ));
             }
             if 2 != val.details.len() {
-                return Err(format!("details map {:?} had wrong number of elements", val.details));   
+                return Err(format!(
+                    "details map {:?} had wrong number of elements",
+                    val.details
+                ));
             }
             if val.arguments.is_some() {
                 return Err(format!("arguments were present: {:?}", val.arguments));
@@ -858,7 +864,12 @@ mod tests {
         assert_eq!(current_thread::block_on_all(query), Ok(()));
 
         println!("Scenario 1: happy path (positional arguments)");
-        listener.handle_event(&[json!(12345), json!(23456), json!({"x": "foo", "y": true}), json!([1, "foobar"])]);
+        listener.handle_event(&[
+            json!(12345),
+            json!(23456),
+            json!({"x": "foo", "y": true}),
+            json!([1, "foobar"]),
+        ]);
         assert_eq!(1, rv.event.lock().len());
         assert_eq!(1, rv.len());
         let query = poll_fn(|| {
@@ -867,19 +878,30 @@ mod tests {
                 res
             });
             if Id::<RouterScope>::from_raw_value(12345) != val.subscription {
-                return Err(format!("subscription ID {:?} did not match", val.subscription));
+                return Err(format!(
+                    "subscription ID {:?} did not match",
+                    val.subscription
+                ));
             }
             if Id::<GlobalScope>::from_raw_value(23456) != val.publication {
-                return Err(format!("publication ID {:?} did not match", val.publication));
+                return Err(format!(
+                    "publication ID {:?} did not match",
+                    val.publication
+                ));
             }
             if 2 != val.details.len() {
-                return Err(format!("details map {:?} had wrong number of elements", val.details));   
+                return Err(format!(
+                    "details map {:?} had wrong number of elements",
+                    val.details
+                ));
             }
             if let Some(arr) = val.arguments {
                 if arr.len() != 2 {
                     return Err(format!("arguments had wrong length {:?}", arr));
                 }
-                if arr[0] != TransportableValue::Integer(1) || arr[1] != TransportableValue::String("foobar".into()) {
+                if arr[0] != TransportableValue::Integer(1)
+                    || arr[1] != TransportableValue::String("foobar".into())
+                {
                     return Err(format!("arguments had wrong values {:?}", arr));
                 }
             } else {
@@ -891,9 +913,15 @@ mod tests {
             Ok(Async::Ready(()))
         });
         assert_eq!(current_thread::block_on_all(query), Ok(()));
-        
+
         println!("Scenario 2: happy path (named arguments)");
-        listener.handle_event(&[json!(12345), json!(23456), json!({"x": "foo", "y": true}), json!([1, "foobar"]), json!({"a": 1, "b": 2})]);
+        listener.handle_event(&[
+            json!(12345),
+            json!(23456),
+            json!({"x": "foo", "y": true}),
+            json!([1, "foobar"]),
+            json!({"a": 1, "b": 2}),
+        ]);
         assert_eq!(1, rv.event.lock().len());
         assert_eq!(1, rv.len());
         let query = poll_fn(|| {
@@ -902,19 +930,30 @@ mod tests {
                 res
             });
             if Id::<RouterScope>::from_raw_value(12345) != val.subscription {
-                return Err(format!("subscription ID {:?} did not match", val.subscription));
+                return Err(format!(
+                    "subscription ID {:?} did not match",
+                    val.subscription
+                ));
             }
             if Id::<GlobalScope>::from_raw_value(23456) != val.publication {
-                return Err(format!("publication ID {:?} did not match", val.publication));
+                return Err(format!(
+                    "publication ID {:?} did not match",
+                    val.publication
+                ));
             }
             if 2 != val.details.len() {
-                return Err(format!("details map {:?} had wrong number of elements", val.details));   
+                return Err(format!(
+                    "details map {:?} had wrong number of elements",
+                    val.details
+                ));
             }
             if let Some(arr) = val.arguments {
                 if arr.len() != 2 {
                     return Err(format!("arguments had wrong length {:?}", arr));
                 }
-                if arr[0] != TransportableValue::Integer(1) || arr[1] != TransportableValue::String("foobar".into()) {
+                if arr[0] != TransportableValue::Integer(1)
+                    || arr[1] != TransportableValue::String("foobar".into())
+                {
                     return Err(format!("arguments had wrong values {:?}", arr));
                 }
             } else {
@@ -952,11 +991,24 @@ mod tests {
         assert_eq!(0, rv.len());
 
         println!("Scenario 7: arguments_kw is not a list");
-        listener.handle_event(&[json!(12345), json!(23456), json!({}), json!([]), json!("not a dict")]);
+        listener.handle_event(&[
+            json!(12345),
+            json!(23456),
+            json!({}),
+            json!([]),
+            json!("not a dict"),
+        ]);
         assert_eq!(0, rv.len());
 
         println!("Scenario 8: too many arguments");
-        listener.handle_event(&[json!(12345), json!(23456), json!({}), json!([]), json!({}), json!("foobar")]);
+        listener.handle_event(&[
+            json!(12345),
+            json!(23456),
+            json!({}),
+            json!([]),
+            json!({}),
+            json!("foobar"),
+        ]);
         assert_eq!(0, rv.len());
 
         println!("Scenario 9: not enough arguments");

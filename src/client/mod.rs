@@ -13,10 +13,7 @@ use tokio::timer::Delay;
 
 use error::WampError;
 use pollable::PollableValue;
-use {
-    GlobalScope, Id, ReceivedValues, RouterScope, Transport,
-    TransportableValue as TV, Uri,
-};
+use {GlobalScope, Id, ReceivedValues, RouterScope, Transport, TransportableValue as TV, Uri};
 
 mod ops {
     pub mod close;
@@ -78,7 +75,10 @@ struct ClientTaskTracker<T: Transport> {
     #[cfg(feature = "subscriber")]
     subscriptions: Mutex<HashMap<Id<RouterScope>, StopSender>>,
 }
-impl<T> ClientTaskTracker<T> where T: Transport {
+impl<T> ClientTaskTracker<T>
+where
+    T: Transport,
+{
     fn new(sender: T, proto_msg_stop_sender: StopSender) -> Arc<Self> {
         Arc::new(ClientTaskTracker {
             sender: Mutex::new(sender),
@@ -314,20 +314,24 @@ impl<T: Transport> Client<T> {
             Either::A(future::err(WampError::RouterSupportMissing.into()))
         } else {
             Either::B(ops::subscribe::SubscriptionFuture::new(
-                self,
-                topic,
-                handler,
+                self, topic, handler,
             ))
         }
     }
 
     /// Unsubscribes from a channel.
     #[cfg(feature = "subscriber")]
-    pub fn unsubscribe(&mut self, subscription: Id<RouterScope>) -> impl Future<Item=(), Error=Error> {
+    pub fn unsubscribe(
+        &mut self,
+        subscription: Id<RouterScope>,
+    ) -> impl Future<Item = (), Error = Error> {
         if !self.router_capabilities.broker {
             Either::A(future::err(WampError::RouterSupportMissing.into()))
         } else {
-            Either::B(ops::unsubscribe::UnsubscriptionFuture::new(self, subscription))
+            Either::B(ops::unsubscribe::UnsubscriptionFuture::new(
+                self,
+                subscription,
+            ))
         }
     }
 
@@ -337,22 +341,23 @@ impl<T: Transport> Client<T> {
     /// incoming messages except acknowledgement of our disconnection are ignored.
     pub fn close(&mut self, reason: Uri) -> impl Future<Item = (), Error = Error> {
         self.state.write(ClientState::ShuttingDown);
-        
+
         // Stop listening for incoming events and RPC invocations.
         self.task_tracker.stop_all_except_proto_msg();
 
         let task_tracker = self.task_tracker.clone();
         let state = self.state.clone();
-        ops::close::CloseFuture::new(self, reason).and_then(move |_| {
-            // We've entered the Closed state now that CloseFuture is resolved.
-            // Stop listening for incoming ABORT and GOODBYE messages and begin
-            // closing the transport.
-            task_tracker.stop_proto_msg_listener();
-            task_tracker.close_transport()
-        }).and_then(move |_| {
-            state.write(ClientState::TransportClosed);
-            future::ok(())
-        })
+        ops::close::CloseFuture::new(self, reason)
+            .and_then(move |_| {
+                // We've entered the Closed state now that CloseFuture is resolved.
+                // Stop listening for incoming ABORT and GOODBYE messages and begin
+                // closing the transport.
+                task_tracker.stop_proto_msg_listener();
+                task_tracker.close_transport()
+            }).and_then(move |_| {
+                state.write(ClientState::TransportClosed);
+                future::ok(())
+            })
     }
 }
 impl<T: Transport> Drop for Client<T> {

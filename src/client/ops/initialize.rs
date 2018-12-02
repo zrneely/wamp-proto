@@ -80,26 +80,28 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                         //
                         // Also, we don't care if the client state changes. We'll be notified via our stop
                         // listener.
-                        Async::NotReady => if self.client_state.read(false) == ClientState::Established {
-                            match self.values.goodbye.lock().poll_take(|_| true) {
-                                Async::Ready(msg) => {
-                                    info!(
-                                        "Received GOODBYE from router: \"{:?}\" ({:?})",
-                                        msg.reason, msg.details
-                                    );
-                                    self.client_state.write(ClientState::Closing);
-                                    ProtocolMessageListenerState::StartReplyGoodbye
+                        Async::NotReady => {
+                            if self.client_state.read(false) == ClientState::Established {
+                                match self.values.goodbye.lock().poll_take(|_| true) {
+                                    Async::Ready(msg) => {
+                                        info!(
+                                            "Received GOODBYE from router: \"{:?}\" ({:?})",
+                                            msg.reason, msg.details
+                                        );
+                                        self.client_state.write(ClientState::Closing);
+                                        ProtocolMessageListenerState::StartReplyGoodbye
+                                    }
+                                    Async::NotReady => {
+                                        pending = true;
+                                        ProtocolMessageListenerState::Ready
+                                    }
                                 }
-                                Async::NotReady => {
-                                    pending = true;
-                                    ProtocolMessageListenerState::Ready
-                                }
+                            } else {
+                                // If we're not in the "Established" state, then act as though
+                                // we polled and didn't get anything.
+                                pending = true;
+                                ProtocolMessageListenerState::Ready
                             }
-                        } else {
-                            // If we're not in the "Established" state, then act as though
-                            // we polled and didn't get anything.
-                            pending = true;
-                            ProtocolMessageListenerState::Ready
                         }
                     }
                 }
@@ -278,13 +280,15 @@ where
                 }
 
                 // Step 2: Wait for the sender's message queue to empty.
-                InitializeFutureState::SendHello => match self.sender.as_mut().unwrap().poll_complete()? {
-                    Async::NotReady => {
-                        pending = true;
-                        InitializeFutureState::SendHello
+                InitializeFutureState::SendHello => {
+                    match self.sender.as_mut().unwrap().poll_complete()? {
+                        Async::NotReady => {
+                            pending = true;
+                            InitializeFutureState::SendHello
+                        }
+                        Async::Ready(_) => InitializeFutureState::WaitWelcome,
                     }
-                    Async::Ready(_) => InitializeFutureState::WaitWelcome,
-                },
+                }
 
                 // Step 3: Wait for a rx::Welcome message.
                 InitializeFutureState::WaitWelcome => {
@@ -300,7 +304,8 @@ where
                             );
 
                             let (stop_sender, receiver) = oneshot::channel();
-                            let task_tracker = ClientTaskTracker::new(self.sender.take().unwrap(), stop_sender);
+                            let task_tracker =
+                                ClientTaskTracker::new(self.sender.take().unwrap(), stop_sender);
                             let client_state = PollableValue::new(ClientState::Established);
 
                             let proto_msg_listener = ProtocolMessageListener {
