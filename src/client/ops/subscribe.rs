@@ -6,7 +6,7 @@ use failure::Error;
 use futures::{sync::oneshot, Async, AsyncSink, Future};
 use tokio::timer::Delay;
 
-use client::{BroadcastHandler, Client, ClientState, ClientTaskTracker};
+use client::{Broadcast, BroadcastHandler, Client, ClientState, ClientTaskTracker};
 use error::WampError;
 use pollable::PollableValue;
 use proto::TxMessage;
@@ -45,13 +45,20 @@ impl Future for SubscriptionListener {
                 .poll_take(|evt| evt.subscription == self.subscription_id);
             match poll_result {
                 Async::Ready(event) => {
-                    // TODO: convert the event to a "broadcast" object and invoke the callback
-                    // TODO: invoke the callback as part of this Future (add state machine), or on its own task?
                     info!(
                         "Subscription {:?} received event: {:?}",
                         self.subscription_id, event
                     );
-                    unimplemented!();
+
+                    // Spawn the event handler on its own task. We can't do it as a part of this function,
+                    // or handler-produced futures will stop executing if the subscription is cancelled.
+                    tokio::spawn((self.handler.target)(Broadcast {
+                        arguments: event.arguments.unwrap_or_else(|| Vec::new()),
+                        arguments_kw: event.arguments_kw.unwrap_or_else(|| HashMap::new()),
+                    }).map_err(|err| {
+                        warn!("Event handler produced error: {:?}", err);
+                        ()
+                    }));
                 }
 
                 // Nothing available yet

@@ -41,7 +41,7 @@ fn check_for_timeout(timeout: &mut Delay) -> Result<(), Error> {
 }
 
 struct BroadcastHandler {
-    target: Box<Fn(Broadcast) -> Box<Future<Item = (), Error = Error>> + Send>,
+    target: Box<Fn(Broadcast) -> Box<Future<Item = (), Error = Error> + Send> + Send>,
 }
 
 // The states a client can be in, according to the WAMP specification.
@@ -283,7 +283,7 @@ impl<T: Transport> Client<T> {
 
     /// Subscribes to a channel.
     ///
-    /// The provided broadcast handler must not block! Any potentially blocking operations it must
+    /// The provided broadcast handler must not block. Any potentially blocking operations it must
     /// perform should be handled by returning a [`Future`], which will be spawned as an subtask
     /// on the executor that drives the returned future. If the handler does not need to perform any
     /// blocking operations, it should return a leaf future (likely created by [`future::ok`]). If the
@@ -313,7 +313,7 @@ impl<T: Transport> Client<T> {
         handler: F,
     ) -> impl Future<Item = Id<RouterScope>, Error = Error>
     where
-        F: 'static + Fn(Broadcast) -> Box<Future<Item = (), Error = Error>> + Send,
+        F: 'static + Fn(Broadcast) -> Box<Future<Item = (), Error = Error> + Send> + Send,
     {
         if !self.router_capabilities.broker {
             Either::A(future::err(WampError::RouterSupportMissing.into()))
@@ -328,8 +328,8 @@ impl<T: Transport> Client<T> {
         }
     }
 
-    #[cfg(feature = "subscriber")]
     /// Unsubscribes from a channel.
+    #[cfg(feature = "subscriber")]
     pub fn unsubscribe(&mut self, subscription: Id<RouterScope>) -> impl Future<Item=(), Error=Error> {
         if !self.router_capabilities.broker {
             Either::A(future::err(WampError::RouterSupportMissing.into()))
