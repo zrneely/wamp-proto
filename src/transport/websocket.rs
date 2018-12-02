@@ -188,7 +188,7 @@ impl WebsocketTransportListener {
                 // Received no message: stream is closed
                 Async::Ready(None) => {
                     warn!("Websocket underlying stream closed!");
-                    return Ok(Async::Ready(()));
+                    return Err(WampError::TransportStreamClosed.into());
                 }
 
                 // Nothing available
