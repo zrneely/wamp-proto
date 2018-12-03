@@ -80,8 +80,6 @@ pub mod known_uri {
     }
 }
 
-// TODO: allow parsing wamp. urls if they come from the router
-
 /// An RFC3989 URI.
 ///
 /// These are used to identify topics, procedures, and errors in WAMP. A URI
@@ -114,7 +112,7 @@ impl Uri {
             static ref RE: Regex = Regex::new(r"^([^\s\.#]+\.)*([^\s\.#]+)$").unwrap();
         }
 
-        if RE.is_match(&text.as_ref()) && !text.as_ref().starts_with("wamp.") {
+        if RE.is_match(&text.as_ref()) {
             Some(Uri(text.as_ref().to_string()))
         } else {
             None
@@ -131,7 +129,7 @@ impl Uri {
             static ref RE: Regex = Regex::new(r"^(([0-9a-z_]+\.)|\.)*([0-9a-z_]+)?$").unwrap();
         }
 
-        if RE.is_match(&text.as_ref()) && !text.as_ref().starts_with("wamp.") {
+        if RE.is_match(&text.as_ref()) {
             Some(Uri(text.as_ref().to_string()))
         } else {
             None
@@ -174,9 +172,9 @@ mod tests {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "a,.b,c.d",
             "A.b.C.d",
+            "wamp.f",
         ];
         let negative_tests = [
-            "wamp.f",
             "a.#.c.d",
             "..",
             "a..b.c.d",
@@ -203,9 +201,9 @@ mod tests {
             "a_.b_c.d123",
             "..",
             "a..b.c.d",
+            "wamp.f",
         ];
         let negative_tests = [
-            "wamp.f",
             "com.foobar.xyz~`$@!%^%",
             "A.b.C.d",
             "a.#.c.d",

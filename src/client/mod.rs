@@ -262,7 +262,7 @@ impl<T: Transport> Client<T> {
     /// Publishes a message. The returned future will complete as soon as the protocol-level work
     /// of sending the message is complete.
     #[cfg(feature = "publisher")]
-    fn publish(&mut self, topic: Uri, broadcast: Broadcast) -> impl Future<Item=(), Error=Error> {
+    pub fn publish(&mut self, topic: Uri, broadcast: Broadcast) -> impl Future<Item=(), Error=Error> {
         if !self.router_capabilities.broker {
             Either::A(future::err(WampError::RouterSupportMissing.into()))
         } else {

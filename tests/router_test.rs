@@ -6,8 +6,12 @@ extern crate tokio;
 extern crate wamp_proto;
 
 use tokio::prelude::*;
-use wamp_proto::{transport::websocket::WebsocketTransport, Client, ClientConfig, Uri};
+use wamp_proto::{
+    transport::websocket::WebsocketTransport,
+    Broadcast, Client, ClientConfig, TransportableValue, Uri
+};
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -46,23 +50,32 @@ fn integration_1() {
             // terminate gracefully and this program should finish. Comment the and_then and map calls
             // to simulate that.
 
-            // }).and_then(|subscription| {
-            // println!("got subscription {:?}", subscription);
-            // println!("closing client");
-            // SAVED_CLIENT.lock().unwrap().as_mut().unwrap().close(Uri::raw("wamp.error.goodbye".to_string()))
+            }).and_then(|subscription| {
+                println!("got subscription {:?}", subscription);
 
-            // println!("Unsubscribing");
-            // SAVED_CLIENT.lock().unwrap().as_mut().unwrap().unsubscribe(subscription)
+                SAVED_CLIENT.lock().unwrap().as_mut().unwrap().publish(
+                    Uri::strict("org.test.channel").unwrap(),
+                    Broadcast {
+                        arguments: vec![TransportableValue::Integer(5)],
+                        arguments_kw: HashMap::new(),
+                    }
+                )
+            // }).and_then(|_| {
+                // println!("closing client");
+                // SAVED_CLIENT.lock().unwrap().as_mut().unwrap().close(Uri::raw("wamp.error.goodbye".to_string()))
+
+                // println!("Unsubscribing");
+                // SAVED_CLIENT.lock().unwrap().as_mut().unwrap().unsubscribe(subscription)
             // }).and_then(|_| {
             //     println!("unsubscribed! closing client");
             //     SAVED_CLIENT.lock().unwrap().as_mut().unwrap().close(Uri::raw("wamp.error.goodbye".to_string()))
             // }).map(|_| {
-            //     println!("client closed!");
+                // println!("client closed!");
 
-            // Comment these two lines to simulate not dropping the client
-            // SAVED_CLIENT.lock().unwrap().take();
-            // println!("client dropped!");
-        }).map_err(|e| println!("error: {:?}", e))
+                // Comment these two lines to simulate not dropping the client
+                // SAVED_CLIENT.lock().unwrap().take();
+                // println!("client dropped!");
+            }).map_err(|e| println!("error: {:?}", e))
         .map(|_| ());
 
     tokio::run(future);

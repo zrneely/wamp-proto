@@ -1,0 +1,25 @@
+<html>
+    <head>
+        <script src="../node_modules/autobahn-browser/autobahn.js"></script>
+        <script type="text/javascript">
+            var connection = new autobahn.Connection({url: 'ws://127.0.0.1:9001', realm:'org.test'});
+            connection.onopen = (session) => {
+                session.subscribe('org.test.channel', (args, kwargs) => {
+                    const ele = document.getElementById('receivedevents');
+                    let newChild = document.createElement('li');
+                    newChild.innerText =
+                        'args: ' + JSON.stringify(args) + ', kwargs: ' + JSON.stringify(kwargs);
+                    ele.appendChild(newChild);
+
+                    session.publish('org.test.channel', [1234], {a: 1234, b: true});
+                });
+            };
+            connection.open();
+        </script>
+    </head>
+    <body>
+        <ul id="receivedevents">
+
+        </ul>
+    </body>
+</html>
