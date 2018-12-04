@@ -7,11 +7,12 @@
 //! This crate implements the WAMP basic profile, and (for now) *none* of the advanced profile.
 
 #![deny(missing_docs)]
+#![allow(dead_code)]
 
 extern crate failure;
 #[macro_use]
 extern crate failure_derive;
-#[macro_use]
+#[cfg_attr(test, macro_use)]
 extern crate futures;
 extern crate http;
 #[macro_use]

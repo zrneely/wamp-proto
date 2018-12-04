@@ -10,7 +10,7 @@ futures = "0.1"
 http = "0.1"
 lazy_static = "1"
 log = "0.4"
-parking_lot = "0.6"
+parking_lot = "0.7"
 rand = "0.6"
 regex = "1"
 serde = "1"
@@ -20,7 +20,7 @@ tokio = "0.1"
 websocket = { git = "https://github.com/enzious/rust-websocket.git", optional = true }
 
 [dev_dependencies]
-env_logger = "*"
+env_logger = "0.6"
 
 [features]
 default = ["callee", "caller", "publisher", "subscriber", "ws_transport"]
