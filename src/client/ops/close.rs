@@ -16,7 +16,7 @@ use {ReceivedValues, Transport, Uri};
 enum CloseFutureState {
     StartSendGoodbye(Option<TxMessage>),
     SendGoodbye,
-    WaitGoodbye,
+    WaitResponse,
 }
 
 pub(in client) struct CloseFuture<T: Transport> {
@@ -90,16 +90,16 @@ where
                             pending = true;
                             CloseFutureState::SendGoodbye
                         }
-                        Async::Ready(_) => CloseFutureState::WaitGoodbye,
+                        Async::Ready(_) => CloseFutureState::WaitResponse,
                     }
                 }
 
                 // Step 3: Wait for the goodbye response from the router.
-                CloseFutureState::WaitGoodbye => {
+                CloseFutureState::WaitResponse => {
                     match self.received.goodbye.lock().poll_take(|_| true) {
                         Async::NotReady => {
                             pending = true;
-                            CloseFutureState::WaitGoodbye
+                            CloseFutureState::WaitResponse
                         }
                         Async::Ready(msg) => {
                             info!(

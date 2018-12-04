@@ -30,14 +30,12 @@ mod ops {
 
 // helper for most operations
 fn check_for_timeout(timeout: &mut Delay) -> Result<(), Error> {
-    match timeout.poll()? {
-        Async::Ready(_) => {
-            info!("Timeout detected!");
-            return Err(WampError::Timeout.into());
-        }
-        _ => {}
-    };
-    Ok(())
+    if let Async::Ready(_) = timeout.poll()? {
+        info!("Timeout detected!");
+        Err(WampError::Timeout.into())
+    } else {
+        Ok(())
+    }
 }
 
 // The states a client can be in, according to the WAMP specification.
@@ -122,9 +120,9 @@ where
     }
 
     #[cfg(feature = "subscriber")]
-    fn stop_subscription(&self, id: &Id<RouterScope>) {
+    fn stop_subscription(&self, id: Id<RouterScope>) {
         let mut subs = self.subscriptions.lock();
-        if let Some(sender) = subs.remove(id) {
+        if let Some(sender) = subs.remove(&id) {
             let _ = sender.send(());
         }
     }
@@ -209,7 +207,7 @@ impl<T: Transport> Client<T> {
     ///
     /// This method will handle initialization of the [`Transport`] used, but the caller must
     /// specify the type of transport.
-    pub fn new<'a>(config: ClientConfig<'a>) -> impl Future<Item = Self, Error = Error> {
+    pub fn new(config: ClientConfig) -> impl Future<Item = Self, Error = Error> {
         let ClientConfig {
             url,
             realm,

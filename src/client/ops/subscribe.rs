@@ -62,8 +62,8 @@ where
                     // or handler-produced futures will stop executing if the subscription is cancelled.
                     tokio::spawn(
                         (self.handler)(Broadcast {
-                            arguments: event.arguments.unwrap_or_else(|| Vec::new()),
-                            arguments_kw: event.arguments_kw.unwrap_or_else(|| HashMap::new()),
+                            arguments: event.arguments.unwrap_or_else(Vec::new),
+                            arguments_kw: event.arguments_kw.unwrap_or_else(HashMap::new),
                         }).map_err(|err| {
                             warn!("Event handler produced error: {:?}", err);
                             ()

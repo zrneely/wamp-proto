@@ -105,7 +105,7 @@ impl<T: Transport> Future for UnsubscriptionFuture<T> {
                     Async::Ready(_) => {
                         // The router has acknowledged our unsubscription; stop the task that listens for
                         // incoming events for the subscription we just cancelled.
-                        self.task_tracker.stop_subscription(&self.subscription);
+                        self.task_tracker.stop_subscription(self.subscription);
                         return Ok(Async::Ready(()));
                     }
                 },

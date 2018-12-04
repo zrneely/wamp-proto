@@ -84,6 +84,11 @@ impl<T> PollableSet<T> {
         self.items.len()
     }
 
+    /// Checks if there are no items in the set.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
     /// Looks for a value in the set matching the given predicate. If one is found, returns it and
     /// removes it from the set. If not, registers the current [`task`]'s interest in the set and
     /// will notify the task when a value is added.
@@ -97,8 +102,7 @@ impl<T> PollableSet<T> {
             .items
             .iter()
             .enumerate()
-            .filter(|&(_, t): &(usize, &T)| predicate(t))
-            .next()
+            .find(|&(_, t)| predicate(t))
         {
             Some((idx, _)) => {
                 let value = self.items.remove(idx);

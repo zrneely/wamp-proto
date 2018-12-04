@@ -122,22 +122,22 @@ impl<'de> Visitor<'de> for ScopeVisitor {
     }
 
     fn visit_u8<E: de::Error>(self, value: u8) -> Result<u64, E> {
-        Ok(value as u64)
+        Ok(u64::from(value))
     }
 
     fn visit_u16<E: de::Error>(self, value: u16) -> Result<u64, E> {
-        Ok(value as u64)
+        Ok(u64::from(value))
     }
 
     fn visit_u32<E: de::Error>(self, value: u32) -> Result<u64, E> {
-        Ok(value as u64)
+        Ok(u64::from(value))
     }
 
     fn visit_u64<E: de::Error>(self, value: u64) -> Result<u64, E> {
         if value > MAX_ID_VAL {
             Err(E::custom(format!("u64 out of range: {}", value)))
         } else {
-            Ok(value as u64)
+            Ok(value)
         }
     }
 }

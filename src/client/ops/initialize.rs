@@ -216,7 +216,7 @@ where
 
         InitializeFuture {
             state: InitializeFutureState::StartSendHello(Some(TxMessage::Hello {
-                realm: realm.clone(),
+                realm,
                 details: {
                     let mut details = HashMap::new();
                     details.insert("roles".into(), {

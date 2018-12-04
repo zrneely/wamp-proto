@@ -178,7 +178,7 @@ impl WebsocketTransportListener {
 
             match poll_result {
                 // Happy path
-                Async::Ready(Some(OwnedMessage::Text(message))) => self.handle_message(message),
+                Async::Ready(Some(OwnedMessage::Text(message))) => self.handle_message(&message),
 
                 // Received some non-text message: log and move on
                 Async::Ready(Some(message)) => {
@@ -197,10 +197,10 @@ impl WebsocketTransportListener {
         }
     }
 
-    fn handle_message(&mut self, message: String) {
+    fn handle_message(&mut self, message: &str) {
         if let Ok(Value::Array(vals)) = serde_json::from_str(&message) {
             debug!("Received websocket message: {:?}", vals);
-            if vals.len() > 0 {
+            if !vals.is_empty() {
                 if let Some(code) = vals[0].as_u64() {
                     match code {
                         rx::Welcome::MSG_CODE => self.handle_welcome(&vals[1..]),
@@ -471,16 +471,16 @@ impl Future for WebsocketTransportConnectFuture {
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         // If the client is ready, make a transport
         match self.future.poll()? {
-            Async::NotReady => return Ok(Async::NotReady),
+            Async::NotReady => Ok(Async::NotReady),
             Async::Ready((client, _headers)) => {
                 let (client, stream) = client.split();
 
-                return Ok(Async::Ready(WebsocketTransport {
+                Ok(Async::Ready(WebsocketTransport {
                     client: Some(client),
                     stream: Arc::new(Mutex::new(Some(stream))),
                     received_values: Some(self.received_values.clone()),
                     listener_stop_sender: None,
-                }));
+                }))
             }
         }
     }
@@ -1029,7 +1029,7 @@ mod tests {
         };
 
         println!("Scenario 0: received 'Welcome'");
-        listener.handle_message(r#"[2,12345,{"x":1,"y":true}]"#.to_string());
+        listener.handle_message(r#"[2,12345,{"x":1,"y":true}]"#);
         assert_eq!(1, rv.welcome.lock().len());
         assert_eq!(1, rv.len());
         let query = poll_fn(|| {
@@ -1048,7 +1048,7 @@ mod tests {
         assert_eq!(current_thread::block_on_all(query), Ok(()));
 
         println!("Scenario 1: received 'Abort'");
-        listener.handle_message(r#"[3,{"x":1,"y":true},"org.foo.bar.error"]"#.to_string());
+        listener.handle_message(r#"[3,{"x":1,"y":true},"org.foo.bar.error"]"#);
         assert_eq!(1, rv.abort.lock().len());
         assert_eq!(1, rv.len());
         let query = poll_fn(|| {
@@ -1067,7 +1067,7 @@ mod tests {
         assert_eq!(current_thread::block_on_all(query), Ok(()));
 
         println!("Scenario 2: received 'Goodbye'");
-        listener.handle_message(r#"[6,{"x":1,"y":true},"org.foo.bar.closed"]"#.to_string());
+        listener.handle_message(r#"[6,{"x":1,"y":true},"org.foo.bar.closed"]"#);
         assert_eq!(1, rv.goodbye.lock().len());
         assert_eq!(1, rv.len());
         let query = poll_fn(|| {
@@ -1086,19 +1086,19 @@ mod tests {
         assert_eq!(current_thread::block_on_all(query), Ok(()));
 
         println!("Scenario 3: received non-json text");
-        listener.handle_message(r#"~!@#$%^&*()"#.to_string());
+        listener.handle_message(r#"~!@#$%^&*()"#);
         assert_eq!(0, rv.len());
 
         println!("Scenario 4: received non-array JSON");
-        listener.handle_message(r#"{"x":1,"y":true}"#.to_string());
+        listener.handle_message(r#"{"x":1,"y":true}"#);
         assert_eq!(0, rv.len());
 
         println!("Scenario 5: received non-number message code");
-        listener.handle_message(r#"["foobar",12345,23456]"#.to_string());
+        listener.handle_message(r#"["foobar",12345,23456]"#);
         assert_eq!(0, rv.len());
 
         println!("Scenario 6: received unknown message code");
-        listener.handle_message(r#"[123456,"L"]"#.to_string());
+        listener.handle_message(r#"[123456,"L"]"#);
         assert_eq!(0, rv.len());
     }
 }
