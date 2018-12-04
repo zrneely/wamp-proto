@@ -174,13 +174,7 @@ mod tests {
             "A.b.C.d",
             "wamp.f",
         ];
-        let negative_tests = [
-            "a.#.c.d",
-            "..",
-            "a..b.c.d",
-            "a. .b.c.d",
-            "a .b.c.d",
-        ];
+        let negative_tests = ["a.#.c.d", "..", "a..b.c.d", "a. .b.c.d", "a .b.c.d"];
 
         for &test in positive_tests.iter() {
             println!("asserting that {} is a valid relaxed URI", test);

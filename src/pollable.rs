@@ -98,12 +98,7 @@ impl<T> PollableSet<T> {
     where
         F: FnMut(&T) -> bool,
     {
-        match self
-            .items
-            .iter()
-            .enumerate()
-            .find(|&(_, t)| predicate(t))
-        {
+        match self.items.iter().enumerate().find(|&(_, t)| predicate(t)) {
             Some((idx, _)) => {
                 let value = self.items.remove(idx);
                 Async::Ready(value)

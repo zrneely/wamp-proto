@@ -55,7 +55,7 @@ impl<T: Transport> Future for PublishFuture<T> {
             ::client::check_for_timeout(&mut self.timeout)?;
 
             match self.client_state.read(true) {
-                ClientState::Established => {},
+                ClientState::Established => {}
                 state => {
                     warn!("PublishFuture with unexpected client state {:?}", state);
                     return Err(WampError::InvalidClientState.into());

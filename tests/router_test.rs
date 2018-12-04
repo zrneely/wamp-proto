@@ -7,8 +7,8 @@ extern crate wamp_proto;
 
 use tokio::prelude::*;
 use wamp_proto::{
-    transport::websocket::WebsocketTransport,
-    Broadcast, Client, ClientConfig, TransportableValue, Uri
+    transport::websocket::WebsocketTransport, Broadcast, Client, ClientConfig, TransportableValue,
+    Uri,
 };
 
 use std::collections::HashMap;
