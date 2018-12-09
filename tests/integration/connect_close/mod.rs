@@ -1,4 +1,4 @@
-//! Coordinates running the basic "can I connect to a router" test.
+//! Basic "can I connect to a router" tests.
 
 use std::sync::Arc;
 
