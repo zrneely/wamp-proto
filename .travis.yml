@@ -10,8 +10,9 @@ matrix:
   fast_finish: true
 
 before_install:
-  - python3 -m pip install --upgrade pip
-  - python3 -m pip install crossbar
+  - export PATH=$HOME/.local/bin:$PATH
+  - pip3 install --user --upgrade pip
+  - pip3 install --user `whoami` crossbar
 
 addons:
   apt:
