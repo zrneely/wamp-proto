@@ -16,7 +16,7 @@ lazy_static! {
 fn connect_close() {
     let _router = start_router();
 
-    let client_config = ClientConfig::new(TEST_URI, Uri::strict(TEST_REALM).unwrap());
+    let client_config = ClientConfig::new("ws://127.0.0.1:9001", Uri::strict(TEST_REALM).unwrap());
     let future = Client::<WebsocketTransport>::new(client_config);
 
     assert_future_passes(10, future.and_then(|client| {
