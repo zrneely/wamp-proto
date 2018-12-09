@@ -9,6 +9,22 @@ matrix:
     - rust: nightly
   fast_finish: true
 
+before_install:
+  - export PATH=$HOME/.local/bin:$PATH
+  - pip3 install --user --upgrade pip
+  - $HOME/.local/bin/pip install --user `whoami` crossbar
+
+addons:
+  apt:
+    packages:
+    - python3-pip
+    - build-essential
+    - libssl-dev
+    - libreadline-dev
+    - libbz2-dev
+    - libsqlite3-dev
+    - libncurses5-dev
+
 env:
   global:
     TRAVIS_CARGO_NIGHTLY_FEATURE=""
