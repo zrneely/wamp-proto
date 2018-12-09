@@ -33,13 +33,13 @@ fn connect_then_router_closed() {
     let client_config = ClientConfig::new(TEST_URI, Uri::strict(TEST_REALM).unwrap());
     let future = Client::<WebsocketTransport>::new(client_config);
 
-    assert_future_passes(10, future.map_err(|_| "connect error").and_then(move |client| {
+    assert_future_passes(10, future.map_err(|err| format!("connect error: {:?}", err)).and_then(move |client| {
         *SAVED_CLIENT.lock() = Some(client);
 
         // Stop the router and wait for the client to stop itself
         drop(router);
 
-        future::poll_fn(|| -> Poll<(), &'static str> {
+        future::poll_fn(|| -> Poll<(), String> {
             if SAVED_CLIENT.lock().as_ref().unwrap().is_open() {
                 Ok(Async::NotReady)
             } else {

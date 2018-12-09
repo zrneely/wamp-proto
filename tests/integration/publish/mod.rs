@@ -22,6 +22,8 @@ fn publish_one_message() {
     assert_future_passes(10, future.and_then(|client| {
         *SAVED_CLIENT.lock() = Some(client);
 
+        // TODO
+
         SAVED_CLIENT.lock().as_mut().unwrap().close(Uri::strict("wamp.error.goodbye").unwrap())
     }));
 }
