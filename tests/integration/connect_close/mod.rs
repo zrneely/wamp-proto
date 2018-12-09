@@ -42,10 +42,10 @@ fn connect_then_router_closed() {
         drop(router);
 
         future::poll_fn(|| -> Poll<(), String> {
-            if SAVED_CLIENT.lock().as_ref().unwrap().is_open() {
-                Ok(Async::NotReady)
-            } else {
+            if SAVED_CLIENT.lock().as_ref().unwrap().is_transport_closed() {
                 Ok(Async::Ready(()))
+            } else {
+                Ok(Async::NotReady)
             }
         })
     }));

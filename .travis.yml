@@ -28,3 +28,4 @@ addons:
 env:
   global:
     TRAVIS_CARGO_NIGHTLY_FEATURE=""
+    RUST_TEST_THREADS=1
