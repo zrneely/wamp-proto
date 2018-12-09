@@ -368,6 +368,11 @@ impl<T: Transport> Client<T> {
                 future::ok(())
             })
     }
+
+    /// Returns true if the client is, at the instant of querying, open and ready.
+    pub fn is_open(&self) -> bool {
+        self.state.read(false) == ClientState::Established
+    }
 }
 impl<T: Transport> Drop for Client<T> {
     fn drop(&mut self) {
