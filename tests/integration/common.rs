@@ -9,17 +9,15 @@ use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
 
 use parking_lot::Mutex;
 use tokio::prelude::*;
 use uuid::prelude::*;
 
 pub const TEST_REALM: &str = "wamp_proto_test";
-pub const TEST_URI: &str = "ws://127.0.0.1:9001";
 
 /// Run a future to completion, waiting for the entire runtime to finish, and asserts that it passed.
-pub fn assert_future_passes<F, I, E>(timeout_secs: u64, future: F)
+pub fn assert_future_passes<F, I, E>(future: F)
 where
     F: Future<Item = I, Error = E> + Send + 'static,
     E: Debug,
@@ -27,42 +25,37 @@ where
     let test_passed = Arc::new(Mutex::new(false));
     let passed_clone = test_passed.clone();
 
-    tokio::run(future
-        .timeout(Duration::from_secs(timeout_secs))
-        .map(move |_| {
-            *passed_clone.lock() = true;
-        }).map_err(move |e| {
-            println!("Future failed: {:?}", e);
-        })
-    );
+    tokio::run(future.map(move |_| {
+        *passed_clone.lock() = true;
+    }).map_err(move |e| {
+        println!("Future failed: {:?}", e);
+    }));
 
     assert!(*test_passed.lock());
 }
 
 /// A handle to a started router; drop to close the router and delete it's config dir.
 pub struct RouterHandle {
-    crossbar_dir: PathBuf,
+    config_handle: ConfigHandle,
     router: Child,
 }
 impl Drop for RouterHandle {
     fn drop(&mut self) {
-        self.router.kill().expect("could not kill router");
-        fs::remove_dir_all(&self.crossbar_dir)
-            .expect(&format!("failed to remove crossbar config dir {:?}", self.crossbar_dir));
+        self.router.kill().expect("could not kill router")
     }
 }
 
 /// Starts a WAMP router, listening on localhost:9001.
 pub fn start_router() -> RouterHandle {
-    let crossbar_dir = set_crossbar_configuration();
-    println!("Created crossbar config: {:?}", crossbar_dir);
+    let config_handle = set_crossbar_configuration();
+    println!("Created crossbar config: {:?}", config_handle);
 
     let mut router = Command::new("crossbar")
         .arg("start")
         .arg("--cbdir")
         .arg({
             let mut path = PathBuf::new();
-            path.push(&crossbar_dir);
+            path.push(&config_handle.path);
             path.push(".crossbar");
             path
         })
@@ -87,12 +80,23 @@ pub fn start_router() -> RouterHandle {
 
     println!("Crossbar router ready!");
     RouterHandle {
-        crossbar_dir,
+        config_handle,
         router,
     }
 }
 
-fn set_crossbar_configuration() -> PathBuf {
+#[derive(Debug)]
+struct ConfigHandle {
+    path: PathBuf,
+}
+impl Drop for ConfigHandle {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.path)
+            .expect(&format!("failed to remove crossbar config dir {:?}", self.path));
+    }
+}
+
+fn set_crossbar_configuration() -> ConfigHandle {
     let crossbar_dir = {
         let mut path = PathBuf::new();
         path.push(".");
@@ -173,5 +177,7 @@ fn set_crossbar_configuration() -> PathBuf {
             .expect("could not write to crossbar config file");
     }
 
-    fs::canonicalize(crossbar_dir).expect("failed to canonicalize crossbar dir")
+    ConfigHandle {
+        path: fs::canonicalize(crossbar_dir).expect("failed to canonicalize crossbar dir")
+    }
 }
