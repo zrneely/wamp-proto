@@ -27,7 +27,7 @@ where
         }
     }
 
-    /// Takes a read lock on the value. If notify is true, registers the current task's interest in future
+    /// Copies the value. If notify is true, registers the current task's interest in future
     /// values of the variable.
     pub fn read(&self, notify: bool) -> T {
         if notify {

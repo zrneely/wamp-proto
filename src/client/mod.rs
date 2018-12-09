@@ -411,8 +411,8 @@ impl RouterCapabilities {
     }
 }
 
-#[cfg(any(feature = "caller", feature = "callee"))]
 /// Arguments to an RPC call.
+#[cfg(any(feature = "caller", feature = "callee"))]
 pub struct RpcArgs {
     /// The positional arguments. If there are none, the `Vec` will be empty.
     pub arguments: Vec<TV>,
@@ -420,8 +420,8 @@ pub struct RpcArgs {
     pub arguments_kw: HashMap<String, TV>,
 }
 
-#[cfg(any(feature = "caller", feature = "callee"))]
 /// Return value from an RPC call.
+#[cfg(any(feature = "caller", feature = "callee"))]
 pub struct RpcReturn {
     /// Positional return values. If there are none, set this to an empty `Vec`.
     pub arguments: Vec<TV>,
@@ -429,16 +429,8 @@ pub struct RpcReturn {
     pub arguments_kw: HashMap<String, TV>,
 }
 
-#[cfg(feature = "callee")]
-/// The result of registering a function as an RPC.
-#[derive(Debug)]
-pub struct Registration {
-    // The ID of the registration, chosen by the router.
-    id: Id<RouterScope>,
-}
-
-#[cfg(any(feautre = "publisher", feature = "subscriber"))]
 /// A message broadcast on a channel.
+#[cfg(any(feautre = "publisher", feature = "subscriber"))]
 pub struct Broadcast {
     /// Positional values. If there are none, this should be an empty `Vec`.
     pub arguments: Vec<TV>,
