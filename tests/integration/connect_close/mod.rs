@@ -14,9 +14,10 @@ lazy_static! {
 
 #[test]
 fn connect_close() {
-    let _router = start_router();
+    let router = start_router();
 
-    let client_config = ClientConfig::new("ws://127.0.0.1:9001", Uri::strict(TEST_REALM).unwrap());
+    let url = router.get_url();
+    let client_config = ClientConfig::new(&url, Uri::strict(TEST_REALM).unwrap());
     let future = Client::<WebsocketTransport>::new(client_config);
 
     assert_future_passes(10, future.and_then(|client| {
@@ -30,7 +31,8 @@ fn connect_close() {
 fn connect_then_router_closed() {
     let router = start_router();
 
-    let client_config = ClientConfig::new(TEST_URI, Uri::strict(TEST_REALM).unwrap());
+    let url = router.get_url();
+    let client_config = ClientConfig::new(&url, Uri::strict(TEST_REALM).unwrap());
     let future = Client::<WebsocketTransport>::new(client_config);
 
     assert_future_passes(10, future.map_err(|err| format!("connect error: {:?}", err)).and_then(move |client| {

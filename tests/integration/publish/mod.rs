@@ -14,9 +14,10 @@ lazy_static! {
 
 #[test]
 fn publish_one_message() {
-    let _router = start_router();
+    let router = start_router();
 
-    let client_config = ClientConfig::new(TEST_URI, Uri::strict(TEST_REALM).unwrap());
+    let url = router.get_url();
+    let client_config = ClientConfig::new(&url, Uri::strict(TEST_REALM).unwrap());
     let future = Client::<WebsocketTransport>::new(client_config);
 
     assert_future_passes(10, future.and_then(|client| {

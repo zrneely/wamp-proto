@@ -8,7 +8,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -16,7 +16,6 @@ use tokio::prelude::*;
 use uuid::prelude::*;
 
 pub const TEST_REALM: &str = "wamp_proto_test";
-pub const TEST_URI: &str = "ws://127.0.0.1:9001";
 
 /// Run a future to completion, waiting for the entire runtime to finish, and asserts that it passed.
 pub fn assert_future_passes<F, I, E>(timeout_secs: u64, future: F)
@@ -43,6 +42,13 @@ where
 pub struct RouterHandle {
     crossbar_dir: PathBuf,
     router: Child,
+    port: u16,
+}
+impl RouterHandle {
+    /// Gets the URL to connect to the router.
+    pub fn get_url(&self) -> String {
+        format!("ws://127.0.0.1:{}", self.port)
+    }
 }
 impl Drop for RouterHandle {
     fn drop(&mut self) {
@@ -54,7 +60,11 @@ impl Drop for RouterHandle {
 
 /// Starts a WAMP router, listening on localhost:9001.
 pub fn start_router() -> RouterHandle {
-    let crossbar_dir = set_crossbar_configuration();
+    lazy_static! {
+        static ref PORT_NUMBER: AtomicUsize = AtomicUsize::new(9000);
+    }
+    let port = PORT_NUMBER.fetch_add(1, Ordering::SeqCst) as u16;
+    let crossbar_dir = set_crossbar_configuration(port);
     println!("Created crossbar config: {:?}", crossbar_dir);
 
     let mut router = Command::new("crossbar")
@@ -89,10 +99,11 @@ pub fn start_router() -> RouterHandle {
     RouterHandle {
         crossbar_dir,
         router,
+        port,
     }
 }
 
-fn set_crossbar_configuration() -> PathBuf {
+fn set_crossbar_configuration(port: u16) -> PathBuf {
     let crossbar_dir = {
         let mut path = PathBuf::new();
         path.push(".");
@@ -152,7 +163,7 @@ fn set_crossbar_configuration() -> PathBuf {
                         "type": "websocket",
                         "endpoint": {
                             "type": "tcp",
-                            "port": 9001,
+                            "port": port,
                         },
                         "debug": true,
                     }
