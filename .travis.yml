@@ -12,7 +12,7 @@ matrix:
 before_install:
   - export PATH=$HOME/.local/bin:$PATH
   - pip3 install --user --upgrade pip
-  - pip3 install --user `whoami` crossbar
+  - $HOME/.local/bin/pip install --user `whoami` crossbar
 
 addons:
   apt:
