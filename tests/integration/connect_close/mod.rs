@@ -1,4 +1,4 @@
-//! Coordinates running the basic "can I connect to a router" test.
+//! Basic "can I connect to a router" tests.
 
 use std::sync::Arc;
 
@@ -14,14 +14,39 @@ lazy_static! {
 
 #[test]
 fn connect_close() {
-    let _router = start_router();
+    let router = start_router();
 
-    let client_config = ClientConfig::new("ws://127.0.0.1:9001", Uri::strict(TEST_REALM).unwrap());
+    let url = router.get_url();
+    let client_config = ClientConfig::new(&url, Uri::strict(TEST_REALM).unwrap());
     let future = Client::<WebsocketTransport>::new(client_config);
 
-    assert_future_passes(future.and_then(|client| {
+    assert_future_passes(10, future.and_then(|client| {
         *SAVED_CLIENT.lock() = Some(client);
 
         SAVED_CLIENT.lock().as_mut().unwrap().close(Uri::strict("wamp.error.goodbye").unwrap())
+    }));
+}
+
+#[test]
+fn connect_then_router_closed() {
+    let router = start_router();
+
+    let url = router.get_url();
+    let client_config = ClientConfig::new(&url, Uri::strict(TEST_REALM).unwrap());
+    let future = Client::<WebsocketTransport>::new(client_config);
+
+    assert_future_passes(10, future.map_err(|err| format!("connect error: {:?}", err)).and_then(move |client| {
+        *SAVED_CLIENT.lock() = Some(client);
+
+        // Stop the router and wait for the client to stop itself
+        drop(router);
+
+        future::poll_fn(|| -> Poll<(), String> {
+            if SAVED_CLIENT.lock().as_ref().unwrap().is_transport_closed() {
+                Ok(Async::Ready(()))
+            } else {
+                Ok(Async::NotReady)
+            }
+        })
     }));
 }

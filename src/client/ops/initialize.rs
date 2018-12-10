@@ -163,7 +163,10 @@ impl<T: Transport> Future for ProtocolMessageListener<T> {
                             debug!("ProtocolMessageListener waiting for Transport::CloseFuture to finish");
                             ProtocolMessageListenerState::CloseTransport
                         }
-                        Ok(Async::Ready(_)) => return Ok(Async::Ready(())),
+                        Ok(Async::Ready(_)) => {
+                            self.client_state.write(ClientState::TransportClosed);
+                            return Ok(Async::Ready(()));
+                        }
                         Err(e) => {
                             error!("Error driving transport close future: {:?}", e);
                             return Err(());
