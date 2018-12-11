@@ -13,6 +13,7 @@ before_install:
   - export PATH=$HOME/.local/bin:$PATH
   - pip3 install --user --upgrade pip
   - $HOME/.local/bin/pip install --user `whoami` crossbar
+  - npm install autobahn
 
 addons:
   apt:
@@ -24,6 +25,8 @@ addons:
     - libbz2-dev
     - libsqlite3-dev
     - libncurses5-dev
+    - nodejs
+    - npm
 
 env:
   global:
