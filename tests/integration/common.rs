@@ -40,7 +40,7 @@ where
     assert!(*test_passed.lock());
 }
 
-pub fn assert_future_passes_and_peer_ok<P, F, E>(timeout_secs: u64, peer_future: P, future: F)
+pub fn assert_future_passes_and_peer_ok<P, F, E>(timeout_secs: u64, peer_future: P, test_future: F)
 where
     P: Future<Item = PeerHandle, Error = String> + Send + 'static,
     F: Future<Item = (), Error = E> + Send + 'static,
@@ -49,12 +49,13 @@ where
     println!("building peer-then-argument future");
     assert_future_passes(
         timeout_secs,
-        peer_future.and_then(|mut peer| future
+        peer_future.and_then(|mut peer| test_future
             .map_err(|e| format!("{:?}", e))
             .join(future::poll_fn(move || {
                 loop {
                     match peer.stdout.poll() {
                         Ok(Async::Ready(Some(line))) => {
+                            println!("from peer: {}", line);
                             if line.contains("test passed") {
                                 return Ok(Async::Ready(()));
                             } else if line.contains("test failed") {
@@ -79,22 +80,24 @@ pub struct PeerHandle {
 
 /// Starts the current test module's peer.
 pub fn start_peer<T: AsRef<Path>>(module: T, test: &str, router: &RouterHandle) -> impl Future<Item = PeerHandle, Error = String> + Send + 'static {
-    let mut peer = Command::new("nodejs")
+    let mut peer = Command::new("python3.6")
         .arg({
             let mut path = PathBuf::new();
             path.push(".");
             path.push("tests");
             path.push("integration");
             path.push(module.as_ref());
-            path.push("peer.js");
+            path.push("peer.py");
             path
         })
         .arg(test)
         .arg(router.get_url())
         .arg(TEST_REALM)
+        // Tell python to flush stdout after every line
+        .env("PYTHONUNBUFFERED", "1")
         .stdout(Stdio::piped())
         .spawn_async()
-        .expect("could not start `node`");
+        .expect("could not start `python3.6`");
 
     let stdout = BufReader::new(peer.stdout().take().expect("did not capture child process stdout"));
     let mut handle = Some(PeerHandle {
@@ -107,6 +110,7 @@ pub fn start_peer<T: AsRef<Path>>(module: T, test: &str, router: &RouterHandle) 
         loop {
             match handle.as_mut().unwrap().stdout.poll() {
                 Ok(Async::Ready(Some(line))) => {
+                    println!("from peer: {}", line);
                     if line.contains("ready") {
                         println!("peer ready");
                         return Ok(Async::Ready(handle.take().unwrap()));
