@@ -4,20 +4,28 @@ rust:
   - stable
   - beta
   - nightly
+
+os:
+  - linux
+dist: xenial
+
 matrix:
+  include:
+    - os: linux
+      dist: xenial
   allow_failures:
     - rust: nightly
   fast_finish: true
 
 before_install:
   - export PATH=$HOME/.local/bin:$PATH
-  - pip3 install --user --upgrade pip
-  - $HOME/.local/bin/pip install --user `whoami` crossbar
+  - pip3 install --user crossbar autobahn
 
 addons:
   apt:
     packages:
     - python3-pip
+    - python3-setuptools
     - build-essential
     - libssl-dev
     - libreadline-dev

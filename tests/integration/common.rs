@@ -2,25 +2,27 @@
 //! This assumes several things about the current environment:
 //!
 //! * `crossbar` is installed and available on the `PATH`.
+//! * `nodejs` is installed and available on the `PATH`.
 
 use std::fmt::Debug;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use std::time::Duration;
 
 use parking_lot::Mutex;
 use tokio::prelude::*;
+use tokio_process::CommandExt;
 use uuid::prelude::*;
 
 pub const TEST_REALM: &str = "wamp_proto_test";
 
 /// Run a future to completion, waiting for the entire runtime to finish, and asserts that it passed.
-pub fn assert_future_passes<F, I, E>(timeout_secs: u64, future: F)
+pub fn assert_future_passes<F, E>(timeout_secs: u64, future: F)
 where
-    F: Future<Item = I, Error = E> + Send + 'static,
+    F: Future<Item = (), Error = E> + Send + 'static,
     E: Debug,
 {
     let test_passed = Arc::new(Mutex::new(false));
@@ -38,10 +40,95 @@ where
     assert!(*test_passed.lock());
 }
 
+pub fn assert_future_passes_and_peer_ok<P, F, E>(timeout_secs: u64, peer_future: P, test_future: F)
+where
+    P: Future<Item = PeerHandle, Error = String> + Send + 'static,
+    F: Future<Item = (), Error = E> + Send + 'static,
+    E: Debug,
+{
+    println!("building peer-then-argument future");
+    assert_future_passes(
+        timeout_secs,
+        peer_future.and_then(|mut peer| test_future
+            .map_err(|e| format!("{:?}", e))
+            .join(future::poll_fn(move || {
+                loop {
+                    match peer.stdout.poll() {
+                        Ok(Async::Ready(Some(line))) => {
+                            println!("from peer: {}", line);
+                            if line.contains("test passed") {
+                                return Ok(Async::Ready(()));
+                            } else if line.contains("test failed") {
+                                return Err("peer explicitly failed test!".into());
+                            }
+                            // ignore all lines that don't contain "test passed" or "test failed"
+                        },
+                        Ok(Async::Ready(None)) => return Err("peer stdout closed before passing/failing test".into()),
+                        Ok(Async::NotReady) => return Ok(Async::NotReady),
+                        Err(e) => return Err(format!("{:?}", e)),
+                    }
+                }
+            }))
+        ).map(|_| ())
+    );
+}
+
+pub struct PeerHandle {
+    _peer: tokio_process::Child,
+    pub stdout: Box<dyn Stream<Item = String, Error = tokio::io::Error> + Send>,
+}
+
+/// Starts the current test module's peer.
+pub fn start_peer<T: AsRef<Path>>(module: T, test: &str, router: &RouterHandle) -> impl Future<Item = PeerHandle, Error = String> + Send + 'static {
+    let mut peer = Command::new("python3")
+        .arg({
+            let mut path = PathBuf::new();
+            path.push(".");
+            path.push("tests");
+            path.push("integration");
+            path.push(module.as_ref());
+            path.push("peer.py");
+            path
+        })
+        .arg(test)
+        .arg(router.get_url())
+        .arg(TEST_REALM)
+        // Tell python to flush stdout after every line
+        .env("PYTHONUNBUFFERED", "1")
+        .stdout(Stdio::piped())
+        .spawn_async()
+        .expect("could not start `python3.6`");
+
+    let stdout = BufReader::new(peer.stdout().take().expect("did not capture child process stdout"));
+    let mut handle = Some(PeerHandle {
+        _peer: peer,
+        stdout: Box::new(tokio::io::lines(stdout)),
+    });
+
+    future::poll_fn(move || {
+        // Wait for the peer to be ready.
+        loop {
+            match handle.as_mut().unwrap().stdout.poll() {
+                Ok(Async::Ready(Some(line))) => {
+                    println!("from peer: {}", line);
+                    if line.contains("ready") {
+                        println!("peer ready");
+                        return Ok(Async::Ready(handle.take().unwrap()));
+                    }
+                    // ignore all lines that don't contain "ready"
+                },
+                Ok(Async::Ready(None)) => return Err("peer stdout closed before ready".into()),
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Err(e) => return Err(format!("{:?}", e)),
+            }
+        }
+    })
+}
+
 /// A handle to a started router; drop to close the router and delete it's config dir.
 pub struct RouterHandle {
     crossbar_dir: PathBuf,
-    router: Child,
+    router: std::process::Child,
     port: u16,
 }
 impl RouterHandle {

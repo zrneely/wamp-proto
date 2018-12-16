@@ -21,6 +21,7 @@ websocket = { git = "https://github.com/enzious/rust-websocket.git", optional = 
 
 [dev_dependencies]
 env_logger = "0.6"
+tokio-process = "0.2"
 uuid = { version = "0.7", features = ["v4"] }
 
 [features]
