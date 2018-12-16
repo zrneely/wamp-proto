@@ -19,13 +19,11 @@ matrix:
 
 before_install:
   - export PATH=$HOME/.local/bin:$PATH
-  - pip3 install --user --upgrade pip
-  - $HOME/.local/bin/pip install --user `whoami` crossbar autobahn
+  - pip3 install --user crossbar autobahn
 
 addons:
   apt:
     packages:
-    - python3-pip
     - build-essential
     - libssl-dev
     - libreadline-dev
