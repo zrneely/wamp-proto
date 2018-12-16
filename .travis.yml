@@ -4,7 +4,14 @@ rust:
   - stable
   - beta
   - nightly
+
+os:
+  - linux
+
 matrix:
+  include:
+    - os: linux
+      dist: xenial
   allow_failures:
     - rust: nightly
   fast_finish: true
