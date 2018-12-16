@@ -80,7 +80,7 @@ pub struct PeerHandle {
 
 /// Starts the current test module's peer.
 pub fn start_peer<T: AsRef<Path>>(module: T, test: &str, router: &RouterHandle) -> impl Future<Item = PeerHandle, Error = String> + Send + 'static {
-    let mut peer = Command::new("python3.6")
+    let mut peer = Command::new("python3")
         .arg({
             let mut path = PathBuf::new();
             path.push(".");
