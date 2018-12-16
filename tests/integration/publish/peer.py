@@ -3,12 +3,12 @@
 # Peer clients to the "publish" integration tests.
 
 import sys
-from autobahn.asyncio.component import Component, run
 
-test_peer_component = Component(
-    transports='ws://localhost:9001',
-    realm='testRealm'
-)
+if sys.version_info[0] != 3 and sys.version_info[1] < 6:
+    print('test failed: expected python 3.6 or greater; got', sys.version)
+    sys.exit(1)
+
+from autobahn.asyncio.component import Component, run
 
 async def publish_one_message_on_joined(session, details):
     # We expect another client to publish a single message to 'org.test.topic1'.
