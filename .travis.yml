@@ -16,7 +16,7 @@ matrix:
   fast_finish: true
 
 before_install:
-  - export PATH=$HOME/.local/bin:$PATH
+  - export PATH=$HOME/.local/bin:/Users/travis/Library/Python3.6/bin:$PATH
   - pip3 install --user crossbar autobahn
 
 addons:
