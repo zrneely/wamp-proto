@@ -182,7 +182,7 @@ pub fn start_router() -> RouterHandle {
         }
     }
 
-    println!("Crossbar router ready!");
+    println!("Crossbar router ready (port {})!", port);
     RouterHandle {
         crossbar_dir,
         router,

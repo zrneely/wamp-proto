@@ -7,18 +7,16 @@ rust:
 
 os:
   - linux
+  - osx
 dist: xenial
 
 matrix:
-  include:
-    - os: linux
-      dist: xenial
   allow_failures:
     - rust: nightly
   fast_finish: true
 
 before_install:
-  - export PATH=$HOME/.local/bin:$PATH
+  - export PATH=$HOME/.local/bin:/Users/travis/Library/Python/3.6/bin:$PATH
   - pip3 install --user crossbar autobahn
 
 addons:
