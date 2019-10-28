@@ -1,7 +1,6 @@
 use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
 
-use futures::task::{self, Task};
-use futures::Async;
 use parking_lot::{Mutex, RwLock};
 
 /// A variable, shared between threads/tasks. When you read from this variable, you also
@@ -13,7 +12,7 @@ use parking_lot::{Mutex, RwLock};
 #[derive(Clone, Debug)]
 pub struct PollableValue<T: Copy> {
     val: Arc<RwLock<T>>,
-    tasks: Arc<Mutex<Vec<Task>>>,
+    wakers: Arc<Mutex<Vec<Waker>>>,
 }
 impl<T> PollableValue<T>
 where
@@ -23,20 +22,21 @@ where
     pub fn new(value: T) -> Self {
         PollableValue {
             val: Arc::new(RwLock::new(value)),
-            tasks: Arc::new(Mutex::new(Vec::with_capacity(1))),
+            wakers: Arc::new(Mutex::new(Vec::with_capacity(1))),
         }
     }
 
-    /// Copies the value. If notify is true, registers the current task's interest in future
+    /// Copies the value. If task context is provided, registers the task's interest in future
     /// values of the variable.
-    pub fn read(&self, notify: bool) -> T {
-        if notify {
-            let task = task::current();
-            let mut lock = self.tasks.lock();
-            if !lock.iter().any(|t| t.will_notify_current()) {
-                // The current task is not yet interested, so add it to the list of interested
-                // tasks.
-                lock.push(task);
+    pub fn read(&self, cx: Option<&mut Context>) -> T {
+        if let Some(ref mut cx) = cx {
+            // We clone the waker instead of storing a ref and using wake_by_ref because
+            // the actual waking operation happens in another method, and we have no way
+            // to tie the lifetime of the current context to the time that method is called.
+            let new_waker = cx.waker().clone();
+            let mut wakers = self.wakers.lock();
+            if !wakers.iter().any(|w| w.will_wake(new_waker)) {
+                wakers.push(new_waker);
             }
         }
 
@@ -49,9 +49,9 @@ where
         *self.val.write() = val;
 
         // Notify all registered tasks that a new value was added.
-        let mut lock = self.tasks.lock();
-        for task in lock.drain(..) {
-            task.notify();
+        let mut wakers = self.wakers.lock();
+        for waker in wakers.drain(..) {
+            waker.wake();
         }
     }
 }
@@ -63,7 +63,7 @@ pub struct PollableSet<T> {
     // The actual set of items we are aware of.
     items: Vec<T>,
     // The tasks to notify when a new value is added.
-    tasks: Vec<Task>,
+    waker: Vec<Waker>,
 }
 impl<T> Default for PollableSet<T> {
     fn default() -> Self {
@@ -75,7 +75,7 @@ impl<T> PollableSet<T> {
     pub fn new() -> Self {
         PollableSet {
             items: Vec::new(),
-            tasks: Vec::with_capacity(1),
+            wakers: Vec::with_capacity(1),
         }
     }
 
@@ -90,27 +90,25 @@ impl<T> PollableSet<T> {
     }
 
     /// Looks for a value in the set matching the given predicate. If one is found, returns it and
-    /// removes it from the set. If not, registers the current [`task`]'s interest in the set and
+    /// removes it from the set. If not, registers the current task's interest in the set and
     /// will notify the task when a value is added.
     ///
     /// If multiple values match the predicate, only the first added is returned.
-    pub fn poll_take<F>(&mut self, mut predicate: F) -> Async<T>
+    pub fn poll_take<F>(&mut self, cx: &mut Context, mut predicate: F) -> Poll<T>
     where
         F: FnMut(&T) -> bool,
     {
         match self.items.iter().enumerate().find(|&(_, t)| predicate(t)) {
             Some((idx, _)) => {
                 let value = self.items.remove(idx);
-                Async::Ready(value)
+                Poll::Ready(value)
             }
             None => {
-                let task = task::current();
-                if !self.tasks.iter().any(|t| t.will_notify_current()) {
-                    // The current task is not yet interested, so add it to the list of interested
-                    // tasks.
-                    self.tasks.push(task);
+                let new_waker = cx.waker().clone();
+                if !self.wakers.iter().any(|w| w.will_wake(new_waker)) {
+                    self.wakers.push(new_waker);
                 }
-                Async::NotReady
+                Poll::Pending
             }
         }
     }
@@ -121,8 +119,8 @@ impl<T> PollableSet<T> {
         self.items.push(value);
 
         // Notify all registered tasks that a new value was added.
-        for task in self.tasks.drain(..) {
-            task.notify();
+        for waker in self.wakers.drain(..) {
+            waker.wake();
         }
     }
 }
@@ -131,13 +129,14 @@ impl<T> PollableSet<T> {
 mod tests {
     use super::*;
 
-    use futures::future::poll_fn;
     use parking_lot::Mutex;
     use std::sync::Arc;
-    use tokio::runtime::current_thread;
+    use tokio::future::poll_fn;
 
     #[test]
     fn pollable_set_test() {
+        let runtime = tokio::runtime::current_thread::Runtime::new().unwrap();
+
         let set = Arc::new(Mutex::new(PollableSet::<u32>::new()));
         assert_eq!(0, set.lock().items.len());
         assert_eq!(0, set.lock().len());
@@ -153,22 +152,22 @@ mod tests {
 
         set.lock().insert(10);
         {
-            let odd_query = poll_fn(|| -> Result<Async<bool>, ()> {
+            let odd_query = poll_fn(|| -> Result<Poll<bool>, ()> {
                 match set.lock().poll_take(|x| x % 2 == 1) {
-                    Async::Ready(_) => Ok(Async::Ready(true)),
-                    Async::NotReady => Ok(Async::Ready(false)),
+                    Poll::Ready(_) => Ok(Poll::Ready(true)),
+                    Poll::Pending => Ok(Poll::Ready(false)),
                 }
             });
-            let even_query = poll_fn(|| -> Result<Async<bool>, ()> {
+            let even_query = poll_fn(|| -> Result<Poll<bool>, ()> {
                 match set.lock().poll_take(|x| x % 2 == 0) {
-                    Async::Ready(_) => Ok(Async::Ready(true)),
-                    Async::NotReady => Ok(Async::Ready(false)),
+                    Poll::Ready(_) => Ok(Poll::Ready(true)),
+                    Poll::Pending => Ok(Poll::Ready(false)),
                 }
             });
 
             // Wait for all the queries to complete
-            assert_eq!(current_thread::block_on_all(odd_query), Ok(false));
-            assert_eq!(current_thread::block_on_all(even_query), Ok(true));
+            assert_eq!(runtime.block_on(odd_query), Ok(false));
+            assert_eq!(runtime.block_on(even_query), Ok(true));
         }
 
         // 3 (before the queries are created), 10 is inserted, and the query consumes one value.

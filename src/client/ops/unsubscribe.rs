@@ -1,32 +1,57 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Instant;
+use std::task::{Context, Poll};
 
 use failure::Error;
-use futures::{Async, AsyncSink, Future};
-use tokio::timer::Delay;
 
-use client::{Client, ClientState, ClientTaskTracker};
-use error::WampError;
-use pollable::PollableValue;
-use proto::TxMessage;
-use {Id, ReceivedValues, RouterScope, SessionScope, Transport};
+use crate::{
+    client::{Client, ClientState, ClientTaskTracker},
+    error::WampError,
+    pollable::PollableValue,
+    proto::TxMessage,
+    transport::Transport,
+    Id, MessageBuffer, RouterScope, SessionScope, SubscriptionStream,
+};
+
+pub(in crate::client) fn unsubscribe<T: Transport, S: SubscriptionStream>(
+    client: &Client<T>,
+    subscription: S,
+) -> impl Future<Output = Result<(), Error>> {
+    let request = Id::<SessionScope>::next();
+
+    UnsubscriptionFuture {
+        state: UnsubscribeFutureState::PrepareSendUnsubscribe,
+        message: Some(TxMessage::Unsubscribe {
+            request,
+            subscription: subscription.get_subscription_id(),
+        }),
+
+        subscription,
+        request: Id::<SessionScope>::next(),
+
+        received: client.received.clone(),
+        client_state: client.state.clone(),
+        task_tracker: client.task_tracker.clone(),
+    }
+}
 
 #[derive(Debug)]
 enum UnsubscribeFutureState {
-    StartSendUnsubscribe,
-    SendUnsubscribe,
+    PrepareSendUnsubscribe,
+    SendAndFlushUnsubscribe,
     WaitUnsubscribed,
 }
 
 /// A future representing a completed unsubscription.
-pub(in client) struct UnsubscriptionFuture<T: Transport> {
+struct UnsubscriptionFuture<T: Transport, S: SubscriptionStream> {
     state: UnsubscribeFutureState,
+    message: Option<TxMessage>,
 
-    subscription: Id<RouterScope>,
+    subscription: S,
     request: Id<SessionScope>,
-    timeout: Delay,
 
-    received: ReceivedValues,
+    received: MessageBuffer,
     client_state: PollableValue<ClientState>,
     task_tracker: Arc<ClientTaskTracker<T>>,
 }
@@ -34,60 +59,55 @@ impl<T: Transport> UnsubscriptionFuture<T> {
     pub fn new(client: &Client<T>, subscription: Id<RouterScope>) -> Self {
         UnsubscriptionFuture {
             state: UnsubscribeFutureState::StartSendUnsubscribe,
-
-            subscription,
-            request: Id::<SessionScope>::next(),
-            timeout: Delay::new(Instant::now() + client.timeout_duration),
-
-            received: client.received.clone(),
-            client_state: client.state.clone(),
-            task_tracker: client.task_tracker.clone(),
         }
     }
 }
 impl<T: Transport> Future for UnsubscriptionFuture<T> {
-    type Item = ();
-    type Error = Error;
+    type Output = Result<(), Error>;
 
-    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
         loop {
             trace!("UnsubscribeFuture: {:?}", self.state);
-            ::client::check_for_timeout(&mut self.timeout)?;
 
-            match self.client_state.read(true) {
+            match self.client_state.read(Some(cx)) {
                 ClientState::Established => {}
                 ref state => {
                     warn!("UnsubscribeFuture with unexpected client state {:?}", state);
-                    return Err(WampError::InvalidClientState.into());
+                    return Poll::Ready(Err(WampError::InvalidClientState.into()));
                 }
             }
 
             let mut pending = false;
             self.state = match self.state {
-                // Step 1: Add the unsubscription request to the sender's message queue. If the queue is full,
-                // return NotReady.
-                UnsubscribeFutureState::StartSendUnsubscribe => {
-                    let message = TxMessage::Unsubscribe {
-                        request: self.request,
-                        subscription: self.subscription,
-                    };
-                    match self.task_tracker.get_sender().lock().start_send(message)? {
-                        AsyncSink::NotReady(_) => {
+                UnsubscribeFutureState::PrepareSendUnsubscribe => {
+                    match self.task_tracker.get_sender().lock().poll_ready(cx) {
+                        Poll::Pending => {
                             pending = true;
-                            UnsubscribeFutureState::StartSendUnsubscribe
+                            UnsubscribeFutureState::PrepareSendUnsubscribe
                         }
-                        AsyncSink::Ready => UnsubscribeFutureState::SendUnsubscribe,
+                        Poll::Ready(Ok(())) => UnsubscribeFutureState::SendAndFlushUnsubscribe,
+                        Poll::Ready(Err(error)) => {
+                            error!("Failed to prepare to send UNSUBSCRIBE: {}", error);
+                            return Poll::Ready(Err(error));
+                        }
                     }
                 }
 
-                // Step 2: Wait for the sender's message queue to empty.
-                UnsubscribeFutureState::SendUnsubscribe => {
-                    match self.task_tracker.get_sender().lock().poll_complete()? {
-                        Async::NotReady => {
+                UnsubscribeFutureState::SendAndFlushUnsubscribe => {
+                    if let Some(message) = self.message.take() {
+                        self.task_tracker.get_sender().lock().start_send(message)?;
+                    }
+
+                    match self.task_tracker.get_sender().lock().poll_flush(cx) {
+                        Poll::Pending => {
                             pending = true;
-                            UnsubscribeFutureState::SendUnsubscribe
+                            UnsubscribeFutureState::SendAndFlushUnsubscribe
                         }
-                        Async::Ready(_) => UnsubscribeFutureState::WaitUnsubscribed,
+                        Poll::Ready(Ok(())) => UnsubscribeFutureState::WaitUnsubscribed,
+                        Poll::Ready(Err(error)) => {
+                            error!("Failed to send UNSUBSCRIBE: {}", error);
+                            return Poll::Ready(Err(error));
+                        }
                     }
                 }
 
@@ -96,23 +116,25 @@ impl<T: Transport> Future for UnsubscriptionFuture<T> {
                     .received
                     .unsubscribed
                     .lock()
-                    .poll_take(|msg| msg.request == self.request)
+                    .poll_take(cx, |msg| msg.request == self.request)
                 {
-                    Async::NotReady => {
+                    Poll::Pending => {
                         pending = true;
                         UnsubscribeFutureState::WaitUnsubscribed
                     }
-                    Async::Ready(_) => {
-                        // The router has acknowledged our unsubscription; stop the task that listens for
-                        // incoming events for the subscription we just cancelled.
-                        self.task_tracker.stop_subscription(self.subscription);
-                        return Ok(Async::Ready(()));
+                    Poll::Ready(_) => {
+                        // The router has acknowledged our unsubscription. Stop the stream and drain
+                        // all remaining messages from the queue.
+                        while let Poll::Ready(Some(_)) = self.subscription.poll_take() {}
+                        self.task_tracker
+                            .stop_subscription(self.subscription.get_subscription_id());
+                        return Poll::Ready(Ok(()));
                     }
                 },
             };
 
             if pending {
-                return Ok(Async::NotReady);
+                return Poll::Pending;
             }
         }
     }

@@ -1,120 +1,127 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Instant;
+use std::task::{Context, Poll};
 
 use failure::Error;
-use futures::{Async, AsyncSink, Future};
-use tokio::timer::Delay;
 
-use client::{Client, ClientState, ClientTaskTracker};
-use error::WampError;
-use pollable::PollableValue;
-use proto::TxMessage;
-use {ReceivedValues, Transport, Uri};
+use crate::{
+    client::{Client, ClientState, ClientTaskTracker},
+    error::WampError,
+    pollable::PollableValue,
+    proto::TxMessage,
+    transport::Transport,
+    MessageBuffer, Uri,
+};
+
+/// Asynchronous function to cleanly close a connection.
+pub(in crate::client) fn close<T: Transport>(
+    client: &Client<T>,
+    reason: Uri,
+) -> impl Future<Output = Result<(), Error>> {
+    CloseFuture {
+        state: CloseFutureState::PrepareSendGoodbye,
+        message: Some(TxMessage::Goodbye {
+            details: HashMap::new(),
+            reason,
+        }),
+        received: client.received.clone(),
+        client_state: client.state.clone(),
+        task_tracker: client.task_tracker.clone(),
+    }
+}
 
 #[derive(Debug)]
 enum CloseFutureState {
-    StartSendGoodbye(Option<TxMessage>),
-    SendGoodbye,
+    PrepareSendGoodbye,
+    SendAndFlushGoodbye,
     WaitResponse,
 }
 
-pub(in client) struct CloseFuture<T: Transport> {
+struct CloseFuture<T: Transport> {
     state: CloseFutureState,
+    message: Option<TxMessage>,
 
-    timeout: Delay,
-
-    received: ReceivedValues,
+    received: MessageBuffer,
     client_state: PollableValue<ClientState>,
     task_tracker: Arc<ClientTaskTracker<T>>,
 }
-impl<T> CloseFuture<T>
-where
-    T: Transport,
-{
-    pub fn new(client: &Client<T>, reason: Uri) -> Self {
-        CloseFuture {
-            state: CloseFutureState::StartSendGoodbye(Some(TxMessage::Goodbye {
-                details: HashMap::new(),
-                reason,
-            })),
+impl<T: Transport> Future for CloseFuture<T> {
+    type Output = Result<(), Error>;
 
-            timeout: Delay::new(Instant::now() + client.shutdown_timeout_duration),
-
-            received: client.received.clone(),
-            client_state: client.state.clone(),
-            task_tracker: client.task_tracker.clone(),
-        }
-    }
-}
-impl<T> Future for CloseFuture<T>
-where
-    T: Transport,
-{
-    type Item = ();
-    type Error = Error;
-
-    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
         loop {
             trace!("CloseFuture: {:?}", self.state);
-            ::client::check_for_timeout(&mut self.timeout)?;
 
             // We DO want to be notified if the client state changes while we're running.
-            match self.client_state.read(true) {
+            match self.client_state.read(Some(cx)) {
                 ClientState::ShuttingDown | ClientState::Closed => {}
                 ref state => {
                     error!("CloseFuture with unexpected client state {:?}", state);
-                    return Err(WampError::InvalidClientState.into());
+                    return Poll::Ready(Err(WampError::InvalidClientState.into()));
                 }
             }
 
             let mut pending = false;
             self.state = match self.state {
-                // Step 1: Add the goodbye message to the sender's message queue. If the queue is full,
-                // return NotReady.
-                CloseFutureState::StartSendGoodbye(ref mut message) => {
-                    let message = message.take().expect("invalid CloseFutureState");
-                    match self.task_tracker.get_sender().lock().start_send(message)? {
-                        AsyncSink::NotReady(message) => {
+                // Step 1: Wait for the queue to become ready.
+                CloseFutureState::PrepareSendGoodbye => {
+                    match self.task_tracker.get_sender().lock().poll_ready(cx) {
+                        Poll::Pending => {
                             pending = true;
-                            CloseFutureState::StartSendGoodbye(Some(message))
+                            CloseFutureState::PrepareSendGoodbye
                         }
-                        AsyncSink::Ready => CloseFutureState::SendGoodbye,
+                        Poll::Ready(Ok(())) => CloseFutureState::SendAndFlushGoodbye,
+                        Poll::Ready(Err(error)) => {
+                            error!("Failed to prepare to send goodbye: {}", error);
+                            return Poll::Ready(Err(error));
+                        }
                     }
                 }
 
-                // Step 2: Wait for the sender's message queue to empty. If it's not empty, return NotReady.
-                CloseFutureState::SendGoodbye => {
-                    match self.task_tracker.get_sender().lock().poll_complete()? {
-                        Async::NotReady => {
+                // Step 2: Add the goodbye message to the sender's message queue, and wait for it
+                // to be flushed.
+                CloseFutureState::SendAndFlushGoodbye => {
+                    // If this is our first time getting here, start to send the message.
+                    if let Some(message) = self.message.take() {
+                        self.task_tracker.get_sender().lock().start_send(message)?;
+                    }
+
+                    match self.task_tracker.get_sender().lock().poll_flush(cx) {
+                        Poll::Pending => {
                             pending = true;
-                            CloseFutureState::SendGoodbye
+                            CloseFutureState::SendAndFlushGoodbye
                         }
-                        Async::Ready(_) => CloseFutureState::WaitResponse,
+                        Poll::Ready(Ok(())) => CloseFutureState::WaitResponse,
+                        Poll::Ready(Err(error)) => {
+                            error!("Failed to send goodbye: {}", error);
+                            return Poll::Ready(Err(error));
+                        }
                     }
                 }
 
                 // Step 3: Wait for the goodbye response from the router.
                 CloseFutureState::WaitResponse => {
-                    match self.received.goodbye.lock().poll_take(|_| true) {
-                        Async::NotReady => {
+                    match self.received.goodbye.lock().poll_take(cx, |_| true) {
+                        Poll::Pending => {
                             pending = true;
                             CloseFutureState::WaitResponse
                         }
-                        Async::Ready(msg) => {
+                        Poll::Ready(msg) => {
                             info!(
                                 "WAMP session closed: response {:?} ({:?})",
                                 msg.details, msg.reason
                             );
                             self.client_state.write(ClientState::Closed);
-                            return Ok(Async::Ready(()));
+                            return Poll::Ready(Ok(()));
                         }
                     }
                 }
             };
 
             if pending {
-                return Ok(Async::NotReady);
+                return Poll::Pending;
             }
         }
     }

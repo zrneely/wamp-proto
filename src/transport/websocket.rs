@@ -1,31 +1,24 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
 use failure::Error;
-use futures::{
-    future::{self, Either, Future},
-    sink::Sink,
-    stream::{SplitSink, SplitStream, Stream},
-    sync::oneshot,
-    Async, AsyncSink,
-};
-use http::HeaderMap;
+
+use async_trait::async_trait;
 use parking_lot::Mutex;
 use serde_json::{self, Value};
-use tokio::reactor;
-use websocket::{
-    async::{client::Client, TcpStream},
-    message::{Message, OwnedMessage},
-    ClientBuilder,
-};
+use tokio::prelude::*;
+use tokio::sync::oneshot;
+use tungstenite::http::HeaderMap;
+use url::Url;
 
-use error::WampError;
-use proto::{
-    rx::{self, RxMessage},
-    TxMessage,
-};
-use {
-    GlobalScope, Id, ReceivedValues, RouterScope, SessionScope, Transport, TransportableValue, Uri,
+use crate::{
+    error::WampError,
+    proto::{
+        rx::{self, RxMessage},
+        TxMessage,
+    },
+    GlobalScope, Id, MessageBuffer, RouterScope, SessionScope, Transport, TransportableValue, Uri,
 };
 
 /// An implementation of a websocket-based WAMP Transport.
@@ -39,7 +32,7 @@ pub struct WebsocketTransport {
     listener_stop_sender: Option<oneshot::Sender<()>>,
 
     // Only present until listen() has been called once
-    received_values: Option<ReceivedValues>,
+    received_values: Option<MessageBuffer>,
 }
 impl Sink for WebsocketTransport {
     type SinkItem = TxMessage;
@@ -54,10 +47,11 @@ impl Sink for WebsocketTransport {
             let message = Message::text(serde_json::to_string(&value)?).into();
             client
                 .start_send(message)
-                .map(|async| match async {
+                .map(|res| match res {
                     AsyncSink::NotReady(_) => AsyncSink::NotReady(item),
                     AsyncSink::Ready => AsyncSink::Ready,
-                }).map_err(|e| e.into())
+                })
+                .map_err(|e| e.into())
         } else {
             Err(WampError::TransportStreamClosed.into())
         }
@@ -71,21 +65,27 @@ impl Sink for WebsocketTransport {
         }
     }
 }
-impl Transport for WebsocketTransport {
-    type ConnectFuture = WebsocketTransportConnectFuture;
-    type CloseFuture = WebsocketTransportCloseFuture;
 
-    fn connect(url: &str, received_values: ReceivedValues) -> WebsocketTransportConnectFuture {
-        let future = match ClientBuilder::new(url) {
-            Ok(builder) => Either::A(
-                builder
-                    // TODO: for now, we only support json; also support msgpack? config?
-                    .add_protocols(vec!["wamp.2.json"])
-                    .async_connect_insecure(&reactor::Handle::current())
-                    .map_err(|e| e.into()),
-            ),
-            Err(e) => Either::B(future::err(e.into())),
+#[async_trait]
+impl Transport for WebsocketTransport {
+    async fn connect(url: &str, received_values: MessageBuffer) -> Result<Self, Error> {
+        let url = Url::parse(url)?;
+        let url_type = tungstenite::client::url_mode(&url)?;
+        let request = {
+            let mut request = tungstenite::handshake::client::Request {
+                url,
+                extra_headers: None,
+            };
+            request.add_protocol("wamp.2.json");
+            request
         };
+
+        match url_type {
+            tungstenite::stream::Mode::Plain => {}
+            tungstenite::stream::Mode::Tls => {}
+        };
+
+        // TODO: waiting on https://github.com/snapview/tokio-tungstenite/pull/68
 
         WebsocketTransportConnectFuture {
             future: Box::new(future),
@@ -135,7 +135,7 @@ impl Drop for WebsocketTransport {
 
 struct WebsocketTransportListener {
     stream: Arc<Mutex<Option<SplitStream<Client<TcpStream>>>>>,
-    received_values: ReceivedValues,
+    received_values: MessageBuffer,
     stop_receiver: oneshot::Receiver<()>,
 }
 impl Future for WebsocketTransportListener {
@@ -436,12 +436,14 @@ fn json_to_tv(value: &Value) -> Option<TransportableValue> {
     Some(match value {
         Value::Null => return None,
         Value::Bool(val) => TransportableValue::Bool(*val),
-        Value::Number(num) => if let Some(val) = num.as_u64() {
-            TransportableValue::Integer(val)
-        } else {
-            warn!("Skipping negative or floating point number {:?}", num);
-            return None;
-        },
+        Value::Number(num) => {
+            if let Some(val) = num.as_u64() {
+                TransportableValue::Integer(val)
+            } else {
+                warn!("Skipping negative or floating point number {:?}", num);
+                return None;
+            }
+        }
         Value::String(val) => TransportableValue::String(val.clone()),
         Value::Array(vals) => {
             TransportableValue::List(vals.into_iter().filter_map(json_to_tv).collect())
@@ -462,7 +464,7 @@ fn json_to_tv(value: &Value) -> Option<TransportableValue> {
 pub struct WebsocketTransportConnectFuture {
     // Sadly we have to box this value, since it's type isn't nameable.
     future: Box<Future<Item = (Client<TcpStream>, HeaderMap), Error = Error> + Send>,
-    received_values: ReceivedValues,
+    received_values: MessageBuffer,
 }
 impl Future for WebsocketTransportConnectFuture {
     type Item = WebsocketTransport;
@@ -577,7 +579,7 @@ mod tests {
 
     #[test]
     fn handle_welcome_test() {
-        let rv = ReceivedValues::default();
+        let rv = MessageBuffer::default();
         let (_sender, stop_receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
             stream: Arc::new(Mutex::new(None)),
@@ -623,7 +625,7 @@ mod tests {
 
     #[test]
     fn handle_abort_test() {
-        let rv = ReceivedValues::default();
+        let rv = MessageBuffer::default();
         let (_sender, stop_receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
             stream: Arc::new(Mutex::new(None)),
@@ -677,7 +679,7 @@ mod tests {
 
     #[test]
     fn handle_goodbye_test() {
-        let rv = ReceivedValues::default();
+        let rv = MessageBuffer::default();
         let (_sender, stop_receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
             stream: Arc::new(Mutex::new(None)),
@@ -732,7 +734,7 @@ mod tests {
     #[cfg(feature = "subscriber")]
     #[test]
     fn handle_subscribed_test() {
-        let rv = ReceivedValues::default();
+        let rv = MessageBuffer::default();
         let (_sender, receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
             stream: Arc::new(Mutex::new(None)),
@@ -781,7 +783,7 @@ mod tests {
 
     #[test]
     fn handle_unsubscribed_test() {
-        let rv = ReceivedValues::default();
+        let rv = MessageBuffer::default();
         let (_sender, receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
             stream: Arc::new(Mutex::new(None)),
@@ -820,7 +822,7 @@ mod tests {
 
     #[test]
     fn handle_event_test() {
-        let rv = ReceivedValues::default();
+        let rv = MessageBuffer::default();
         let (_sender, receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
             stream: Arc::new(Mutex::new(None)),
@@ -1020,7 +1022,7 @@ mod tests {
 
     #[test]
     fn handle_message_test() {
-        let rv = ReceivedValues::default();
+        let rv = MessageBuffer::default();
         let (_sender, stop_receiver) = oneshot::channel();
         let mut listener = WebsocketTransportListener {
             stream: Arc::new(Mutex::new(None)),

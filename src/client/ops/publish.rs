@@ -1,93 +1,108 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Instant;
+use std::task::{Context, Poll};
 
 use failure::Error;
-use futures::{Async, AsyncSink, Future};
-use tokio::timer::Delay;
 
-use client::{Client, ClientState, ClientTaskTracker};
-use error::WampError;
-use pollable::PollableValue;
-use proto::TxMessage;
-use {Broadcast, Id, SessionScope, Transport, Uri};
+use crate::{
+    client::{Client, ClientState, ClientTaskTracker},
+    error::WampError,
+    pollable::PollableValue,
+    proto::TxMessage,
+    transport::Transport,
+    Broadcast, Id, SessionScope, Uri,
+};
+
+pub(in crate::client) fn publish<T: Transport>(
+    client: &Client<T>,
+    topic: Uri,
+    message: Broadcast,
+) -> impl Future<Output = Result<(), Error>> {
+    PublishFuture {
+        state: PublishFutureState::PrepareSendPublish,
+        message: TxMessage::Publish {
+            request: Id::<SessionScope>::next(),
+            options: HashMap::new(),
+            topic,
+            arguments: Some(message.arguments),
+            arguments_kw: Some(message.arguments_kw),
+        },
+        client_state: client.state.clone(),
+        task_tracker: client.task_tracker.clone(),
+    }
+}
 
 #[derive(Debug)]
 enum PublishFutureState {
-    StartSendPublish(Option<TxMessage>),
-    SendPublish,
+    PrepareSendPublish,
+    SendAndFlushPublish,
 }
 
 /// A future used to drive publishing a message
-pub(in client) struct PublishFuture<T: Transport> {
+struct PublishFuture<T: Transport> {
     state: PublishFutureState,
-
-    timeout: Delay,
+    message: Option<TxMessage>,
 
     client_state: PollableValue<ClientState>,
     task_tracker: Arc<ClientTaskTracker<T>>,
 }
-impl<T: Transport> PublishFuture<T> {
-    pub fn new(client: &Client<T>, topic: Uri, message: Broadcast) -> Self {
-        PublishFuture {
-            state: PublishFutureState::StartSendPublish(Some(TxMessage::Publish {
-                request: Id::<SessionScope>::next(),
-                options: HashMap::new(),
-                topic,
-                arguments: Some(message.arguments),
-                arguments_kw: Some(message.arguments_kw),
-            })),
-
-            timeout: Delay::new(Instant::now() + client.timeout_duration),
-
-            client_state: client.state.clone(),
-            task_tracker: client.task_tracker.clone(),
-        }
-    }
-}
 impl<T: Transport> Future for PublishFuture<T> {
-    type Item = ();
-    type Error = Error;
+    type Output = Result<(), Error>;
 
-    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
         loop {
             trace!("PublishFuture: {:?}", self.state);
-            ::client::check_for_timeout(&mut self.timeout)?;
 
-            match self.client_state.read(true) {
+            match self.client_state.read(Some(cx)) {
                 ClientState::Established => {}
                 state => {
                     warn!("PublishFuture with unexpected client state {:?}", state);
-                    return Err(WampError::InvalidClientState.into());
+                    return Poll::Ready(Err(WampError::InvalidClientState.into()));
                 }
             }
 
             let mut pending = false;
             self.state = match self.state {
-                PublishFutureState::StartSendPublish(ref mut message) => {
-                    let message = message.take().expect("invalid PublishFutureState");
-                    match self.task_tracker.get_sender().lock().start_send(message)? {
-                        AsyncSink::NotReady(message) => {
+                PublishFutureState::PrepareSendPublish => {
+                    match self.task_tracker.get_sender().lock().poll_ready(cx) {
+                        Poll::Pending => {
                             pending = true;
-                            PublishFutureState::StartSendPublish(Some(message))
+                            PublishFutureState::PrepareSendPublish
                         }
-                        AsyncSink::Ready => PublishFutureState::SendPublish,
+                        Poll::Ready(Ok(())) => PublishFutureState::SendAndFlushPublish,
+                        Poll::Ready(Err(error)) => {
+                            error!("Failed to prepare to send PUBLISH: {}", error);
+                            return Poll::Ready(Err(error));
+                        }
                     }
                 }
 
-                PublishFutureState::SendPublish => {
-                    match self.task_tracker.get_sender().lock().poll_complete()? {
-                        Async::NotReady => {
+                PublishFutureState::SendAndFlushPublish => {
+                    if let Some(message) = self.message.take() {
+                        self.task_tracker.get_sender().lock().start_send(message)?;
+                    }
+
+                    match self.task_tracker.get_sender().lock().poll_flush(cx)? {
+                        Poll::Pending => {
                             pending = true;
-                            PublishFutureState::SendPublish
+                            PublishFutureState::SendAndFlushPublish
                         }
-                        Async::Ready(_) => return Ok(Async::Ready(())),
+                        Poll::Ready(Ok(())) => {
+                            info!("Sent PUBLISH successfully");
+                            return Poll::Ready(Ok(()));
+                        }
+                        Poll::Ready(Err(error)) => {
+                            error!("Failed to send PUBLISH");
+                            return Poll::Ready(Err(error));
+                        }
                     }
                 }
             };
 
             if pending {
-                return Ok(Async::NotReady);
+                return Poll::Pending;
             }
         }
     }

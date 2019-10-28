@@ -9,29 +9,18 @@
 #![deny(missing_docs)]
 #![allow(dead_code)]
 
-extern crate failure;
 #[macro_use]
 extern crate failure_derive;
-#[cfg_attr(test, macro_use)]
-extern crate futures;
-extern crate http;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
-extern crate parking_lot;
-extern crate rand;
-extern crate regex;
-extern crate serde;
 #[macro_use]
 extern crate serde_derive;
-extern crate tokio;
 
 #[cfg(feature = "ws_transport")]
 #[macro_use]
 extern crate serde_json;
-#[cfg(feature = "ws_transport")]
-extern crate websocket;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -42,9 +31,9 @@ use std::sync::{
 };
 
 use failure::Error;
-use futures::prelude::*;
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
+use tokio::prelude::*;
 
 #[cfg(feature = "ws_transport")]
 use serde::{
@@ -240,73 +229,6 @@ impl TransportableValue {
     }
 }
 
-/// A transport capable of supporting a WAMP connection.
-///
-/// While WAMP was designed with Websockets in mind, any message transport can be used if it is
-/// message-based, bidirectional, ordered, and reliable. This crate includes one transport
-/// implementation, the default websocket-based one, in [`transport::websocket::WebsocketTransport`].
-///
-/// A transport provides a [`Sink`] for [`TxMessage`] objects. It also provides what is effectively
-/// a [`Stream`] for each type of incoming message.
-///
-/// It is not the responsibility of the transport to associate meaning with any received messages.
-/// For example, a transport should *not* close itself upon receiving an ABORT message. It should also
-/// *not* look for or even be aware of out-of-order messages.
-///
-/// If a transport's underlying connection fatally fails or is lost, transports should inform their
-/// client by adding to the "errors" list in the ReceivedValues. Transport implementations should not
-/// attempt to transparently recreate the connection. The WAMP protocol defines a WAMP session's
-/// lifetime as a subset of the underlying connection's lifetime, so the WAMP session will have to be
-/// re-established in that case.
-///
-/// If a message is pushed to the `transport_errors` queue in [`ReceivedValues`], `close()` will *NOT*
-/// be called on the transport. The transport should clean up all of its resources independently in
-/// that scenario.
-pub trait Transport: Sized + Sink<SinkItem = TxMessage, SinkError = Error> + Send {
-    /// The type of future returned when this transport opens a connection.
-    type ConnectFuture: Future<Item = Self, Error = Error> + Send;
-    /// The type of future returned when this transport is closed.
-    type CloseFuture: Future<Item = (), Error = Error> + Send;
-
-    /// Asynchronously constructs a transport to the router at the given location. This method
-    /// must be called under a Tokio runtime.
-    ///
-    /// The format of the location string is implementation defined, but will probably be a URL.
-    /// This method should do asynchronous work such as opening a TCP socket or initializing a
-    /// websocket connection.
-    ///
-    /// # Return Value
-    ///
-    /// This method returns a future which, when resolved, provides the actual transport instance.
-    ///
-    /// # Panics
-    ///
-    /// This method may panic if not called under a tokio runtime. It should handle failures by returning
-    /// [`Err`] from the appropriate future, or an Err() result for synchronous errors.
-    fn connect(url: &str, rv: ReceivedValues) -> Self::ConnectFuture;
-
-    /// Spawns a long-running task which will listen for events and forward them to the
-    /// [`ReceivedValues`] returned by the [`connect`] method. Multiple calls to this method
-    /// have no effect beyond the first. This method must be called under a Tokio reactor.
-    ///
-    /// # Remarks
-    ///
-    /// It is unfortunately necessary to have a long-running task, not just to handle RPC
-    /// invokations, but also to act as an underlying data source for the [`PollableSet`]s which
-    /// the client queries. It is critical that this buffer is used so that messages can arrive
-    /// out-of-order and client [`Future`]s will still be properly notified, without being stuck
-    /// in a notify loop.
-    ///
-    /// # Panics
-    ///
-    /// This method will panic if not called under a tokio runtime.
-    fn listen(&mut self);
-
-    /// Closes whatever connection this has open and stops listening for incoming messages.
-    /// Calling this before `listen` is undefined behavior.
-    fn close(&mut self) -> Self::CloseFuture;
-}
-
 /// A thread-safe pollable set - convenience typedef to save on typing. This effectively acts
 /// as an inefficient spmc queue, with the ability to listen only for messages that pass a
 /// caller-defined predicate.
@@ -317,7 +239,7 @@ pub type TsPollSet<T> = Arc<Mutex<PollableSet<T>>>;
 /// Acts as a buffer for each type of returned message, and any possible errors
 /// (either in the transport layer or the protocol).
 #[derive(Clone, Default, Debug)]
-pub struct ReceivedValues {
+pub struct MessageBuffer {
     /// The queue of incoming "WELCOME" messages.
     pub welcome: TsPollSet<rx::Welcome>,
     /// The buffer of incoming "ABORT" messages.
@@ -357,7 +279,7 @@ pub struct ReceivedValues {
     #[cfg(feature = "caller")]
     pub result: TsPollSet<rx::Result>,
 }
-impl ReceivedValues {
+impl MessageBuffer {
     #[cfg(test)]
     fn len(&self) -> usize {
         let mut len = self.welcome.lock().len()

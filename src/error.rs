@@ -1,4 +1,6 @@
-use {Id, SessionScope, Uri};
+use failure::Error;
+
+use crate::{Id, SessionScope, Uri};
 
 /// An error produced by the WAMP crate directly.
 #[derive(Debug, Fail)]
@@ -10,8 +12,7 @@ pub enum WampError {
     /// An unexpected message was received.
     #[fail(
         display = "unexpected message received: {:?} (was expecting {})",
-        message,
-        expecting
+        message, expecting
     )]
     UnexpectedMessage {
         /// A textual representation of the unexpected message.
@@ -20,9 +21,13 @@ pub enum WampError {
         expecting: &'static str,
     },
 
-    /// The transport was closed.
-    #[fail(display = "transport closed")]
-    TransportStreamClosed,
+    /// The transport's message stream was closed.
+    #[fail(display = "transport stream closed: {}", 0)]
+    TransportStreamClosed(Error),
+
+    /// The transport's message sink was closed.
+    #[fail(display = "transport sink closed: {}", 0)]
+    TransportSinkClosed(Error),
 
     /// The router does not support a required role.
     #[fail(display = "router does not support required role")]

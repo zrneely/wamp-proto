@@ -2,22 +2,25 @@
 name = "wamp-proto"
 version = "0.1.0"
 authors = ["Zachary Neely <zrussellneely@gmail.com>"]
+edition = "2018"
 
 [dependencies]
+async-trait = "0.1"
 failure = "0.1"
 failure_derive = "0.1"
-futures = "0.1"
-http = "0.1"
 lazy_static = "1"
 log = "0.4"
-parking_lot = "0.7"
-rand = "0.6"
+parking_lot = "0.9"
+rand = "0.7"
 regex = "1"
 serde = "1"
 serde_derive = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
-tokio = "0.1"
-websocket = { git = "https://github.com/enzious/rust-websocket.git", optional = true }
+tokio = "0.2.0-alpha.6"
+tokio-executor = "0.2.0-alpha.6"
+tokio-io = "0.2.0-alpha.6"
+tungstenite = { version = "0.9", optional = true }
+url = "2"
 
 [dev_dependencies]
 env_logger = "0.6"
@@ -30,4 +33,4 @@ callee = []
 caller = []
 publisher = []
 subscriber = []
-ws_transport = ["websocket", "serde_json", "serde_derive"]
+ws_transport = ["tungstenite", "serde_json", "serde_derive"]
