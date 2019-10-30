@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use failure::Error;
 
@@ -18,7 +20,8 @@ use crate::{
         rx::{self, RxMessage},
         TxMessage,
     },
-    GlobalScope, Id, MessageBuffer, RouterScope, SessionScope, Transport, TransportableValue, Uri,
+    transport::{Transport, TransportableValue},
+    GlobalScope, Id, MessageBuffer, RouterScope, SessionScope, Uri,
 };
 
 /// An implementation of a websocket-based WAMP Transport.
@@ -34,36 +37,51 @@ pub struct WebsocketTransport {
     // Only present until listen() has been called once
     received_values: Option<MessageBuffer>,
 }
-impl Sink for WebsocketTransport {
-    type SinkItem = TxMessage;
-    type SinkError = Error;
+impl Sink<TxMessage> for WebsocketTransport {
+    type Error = Error;
 
-    fn start_send(
-        &mut self,
-        item: Self::SinkItem,
-    ) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
-        let value = item.to_json();
-        if let Some(ref mut client) = self.client {
-            let message = Message::text(serde_json::to_string(&value)?).into();
-            client
-                .start_send(message)
-                .map(|res| match res {
-                    AsyncSink::NotReady(_) => AsyncSink::NotReady(item),
-                    AsyncSink::Ready => AsyncSink::Ready,
-                })
-                .map_err(|e| e.into())
-        } else {
-            Err(WampError::TransportStreamClosed.into())
-        }
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
+        unimplemented!()
     }
 
-    fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
-        if let Some(ref mut client) = self.client {
-            client.poll_complete().map_err(|e| e.into())
-        } else {
-            Err(WampError::TransportStreamClosed.into())
-        }
+    fn start_send(self: Pin<&mut Self>, item: TxMessage) -> Result<(), Error> {
+        unimplemented!()
     }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
+        unimplemented!()
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
+        unimplemented!()
+    }
+
+    // fn start_send(
+    //     &mut self,
+    //     item: TxMessage,
+    // ) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
+    //     let value = item.to_json();
+    //     if let Some(ref mut client) = self.client {
+    //         let message = Message::text(serde_json::to_string(&value)?).into();
+    //         client
+    //             .start_send(message)
+    //             .map(|res| match res {
+    //                 AsyncSink::NotReady(_) => AsyncSink::NotReady(item),
+    //                 AsyncSink::Ready => AsyncSink::Ready,
+    //             })
+    //             .map_err(|e| e.into())
+    //     } else {
+    //         Err(WampError::TransportStreamClosed.into())
+    //     }
+    // }
+
+    // fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
+    //     if let Some(ref mut client) = self.client {
+    //         client.poll_complete().map_err(|e| e.into())
+    //     } else {
+    //         Err(WampError::TransportStreamClosed.into())
+    //     }
+    // }
 }
 
 #[async_trait]
@@ -76,7 +94,7 @@ impl Transport for WebsocketTransport {
                 url,
                 extra_headers: None,
             };
-            request.add_protocol("wamp.2.json");
+            request.add_protocol("wamp.2.json".into());
             request
         };
 
@@ -108,7 +126,7 @@ impl Transport for WebsocketTransport {
         }
     }
 
-    fn close(&mut self) -> Self::CloseFuture {
+    async fn close(self: Pin<&mut Self>) -> Result<(), Error> {
         // Dropping the stream will close the listener; we also spawn a new task to close the client.
         self.stream.lock().take();
         debug!("WebsocketTransport dropped stream");
@@ -139,31 +157,38 @@ struct WebsocketTransportListener {
     stop_receiver: oneshot::Receiver<()>,
 }
 impl Future for WebsocketTransportListener {
-    type Item = ();
-    type Error = ();
+    type Output = ();
 
-    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
-        self.poll_impl().map_err(|e| {
-            // If we get a transport error, tell the ProtocolMessageListener to stop and drop
-            // our underlying stream. The client will not call close() on us.
-            error!("WebsocketTransportListener poll error: {:?}", e);
-            self.stream.lock().take();
-            self.received_values.transport_errors.lock().insert(e);
-        })
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
+        match self.poll_impl(cx) {
+            Poll::Ready(Err(error)) => {
+                // If we get a transport error, tell the ProtocolMessageListener to stop and drop
+                // our underlying stream. The client will not call close() on us.
+                error!("WebsocketTransportListener poll error: {:?}", error);
+                self.stream.lock().take();
+                self.received_values.transport_errors.lock().insert(error);
+                Poll::Ready(())
+            }
+            anything_else => anything_else,
+        }
     }
 }
 impl WebsocketTransportListener {
-    fn poll_impl(&mut self) -> Result<Async<()>, Error> {
+    fn poll_impl(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
         trace!("WebsocketTransportListener wakeup");
         loop {
-            match self.stop_receiver.poll() {
+            match self.stop_receiver.poll(cx) {
                 // we haven't been told to stop
-                Ok(Async::NotReady) => {}
+                Poll::Pending => {}
                 // either we have been told to stop, or the sender was dropped, in which case
                 // we should also stop
-                Ok(Async::Ready(_)) | Err(_) => {
+                Poll::Ready(Ok(())) => {
                     debug!("WebsocketTransportListener told to stop!");
-                    return Ok(Async::Ready(()));
+                    return Poll::Ready(Ok(()));
+                }
+                Poll::Ready(Err(err)) => {
+                    warn!("WebsocketTransportListener's stop_listener was broken!");
+                    return Poll::Ready(Ok(()));
                 }
             }
 
@@ -172,27 +197,27 @@ impl WebsocketTransportListener {
                     stream.poll()?
                 } else {
                     warn!("WebsocketTransportListener source stream closed!");
-                    return Ok(Async::Ready(()));
+                    return Poll::Ready(Ok(()));
                 }
             };
 
             match poll_result {
                 // Happy path
-                Async::Ready(Some(OwnedMessage::Text(message))) => self.handle_message(&message),
+                Poll::Ready(Some(OwnedMessage::Text(message))) => self.handle_message(&message),
 
                 // Received some non-text message: log and move on
-                Async::Ready(Some(message)) => {
+                Poll::Ready(Some(message)) => {
                     warn!("Received non-text message {:?}", message);
                 }
 
                 // Received no message: stream is closed
-                Async::Ready(None) => {
+                Poll::Ready(None) => {
                     warn!("Websocket underlying stream closed!");
-                    return Err(WampError::TransportStreamClosed.into());
+                    return Poll::Ready(Err(WampError::TransportStreamClosed.into()));
                 }
 
                 // Nothing available
-                Async::NotReady => return Ok(Async::NotReady),
+                Poll::Pending => return Poll::Pending,
             }
         }
     }

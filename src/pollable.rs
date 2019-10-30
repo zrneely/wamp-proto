@@ -33,10 +33,10 @@ where
             // We clone the waker instead of storing a ref and using wake_by_ref because
             // the actual waking operation happens in another method, and we have no way
             // to tie the lifetime of the current context to the time that method is called.
-            let new_waker = cx.waker().clone();
+            let new_waker = cx.waker();
             let mut wakers = self.wakers.lock();
             if !wakers.iter().any(|w| w.will_wake(new_waker)) {
-                wakers.push(new_waker);
+                wakers.push(new_waker.clone());
             }
         }
 
@@ -56,14 +56,15 @@ where
     }
 }
 
-/// A set which registers interest in a potential value if a query finds no result. Requires
-/// external synchronization.
-#[derive(Debug)]
+/// A set which registers interest in a potential value if a query finds no result.
+/// Can be cheaply cloned (clones refer to the same internal structures using Arc).
+/// Does synchronization internally.
+#[derive(Clone, Debug)]
 pub struct PollableSet<T> {
     // The actual set of items we are aware of.
-    items: Vec<T>,
+    items: Arc<RwLock<Vec<T>>>,
     // The tasks to notify when a new value is added.
-    waker: Vec<Waker>,
+    wakers: Arc<Mutex<Vec<Waker>>>,
 }
 impl<T> Default for PollableSet<T> {
     fn default() -> Self {
@@ -74,19 +75,19 @@ impl<T> PollableSet<T> {
     /// Creates a new pollable set.
     pub fn new() -> Self {
         PollableSet {
-            items: Vec::new(),
-            wakers: Vec::with_capacity(1),
+            items: Arc::new(RwLock::new(Vec::new())),
+            wakers: Arc::new(Mutex::new(Vec::with_capacity(1))),
         }
     }
 
     /// Queries the size of the set at this particular instant.
     pub fn len(&self) -> usize {
-        self.items.len()
+        self.items.read().len()
     }
 
     /// Checks if there are no items in the set.
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.items.read().is_empty()
     }
 
     /// Looks for a value in the set matching the given predicate. If one is found, returns it and
@@ -94,32 +95,47 @@ impl<T> PollableSet<T> {
     /// will notify the task when a value is added.
     ///
     /// If multiple values match the predicate, only the first added is returned.
-    pub fn poll_take<F>(&mut self, cx: &mut Context, mut predicate: F) -> Poll<T>
+    pub fn poll_take<F>(&self, cx: &mut Context, mut predicate: F) -> Poll<T>
     where
         F: FnMut(&T) -> bool,
     {
-        match self.items.iter().enumerate().find(|&(_, t)| predicate(t)) {
+        let items = self.items.write();
+        match items.iter().enumerate().find(|&(_, t)| predicate(t)) {
             Some((idx, _)) => {
-                let value = self.items.remove(idx);
+                let value = items.remove(idx);
                 Poll::Ready(value)
             }
             None => {
-                let new_waker = cx.waker().clone();
-                if !self.wakers.iter().any(|w| w.will_wake(new_waker)) {
-                    self.wakers.push(new_waker);
+                let new_waker = cx.waker();
+                let wakers = self.wakers.lock();
+                if !wakers.iter().any(|w| w.will_wake(new_waker)) {
+                    wakers.push(new_waker.clone());
                 }
                 Poll::Pending
             }
         }
     }
 
+    /// Synchronously removes all items matching the given predicate.
+    pub fn drain<F: FnMut(&T) -> bool>(&self, mut predicate: F) {
+        let mut items = self.items.write();
+        let mut i = 0;
+        while i != items.len() {
+            if predicate(&items[i]) {
+                items.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     /// Inserts a value into the set. This will trigger a notification for every task which has
     /// previously called poll_take and received [`Async::Pending`].
-    pub fn insert(&mut self, value: T) {
-        self.items.push(value);
+    pub fn insert(&self, value: T) {
+        self.items.write().push(value);
 
         // Notify all registered tasks that a new value was added.
-        for waker in self.wakers.drain(..) {
+        for waker in self.wakers.lock().drain(..) {
             waker.wake();
         }
     }
@@ -129,49 +145,47 @@ impl<T> PollableSet<T> {
 mod tests {
     use super::*;
 
-    use parking_lot::Mutex;
-    use std::sync::Arc;
     use tokio::future::poll_fn;
 
     #[test]
     fn pollable_set_test() {
         let runtime = tokio::runtime::current_thread::Runtime::new().unwrap();
 
-        let set = Arc::new(Mutex::new(PollableSet::<u32>::new()));
-        assert_eq!(0, set.lock().items.len());
-        assert_eq!(0, set.lock().len());
+        let set = PollableSet::<u32>::new();
+        assert_eq!(0, set.items.read().len());
+        assert_eq!(0, set.len());
 
-        set.lock().insert(6);
-        assert_eq!(1, set.lock().items.len());
-        assert_eq!(1, set.lock().len());
+        set.insert(6);
+        assert_eq!(1, set.items.read().len());
+        assert_eq!(1, set.len());
 
-        set.lock().insert(4);
-        set.lock().insert(8);
-        assert_eq!(3, set.lock().items.len());
-        assert_eq!(3, set.lock().len());
+        set.insert(4);
+        set.insert(8);
+        assert_eq!(3, set.items.read().len());
+        assert_eq!(3, set.len());
 
-        set.lock().insert(10);
+        set.insert(10);
         {
-            let odd_query = poll_fn(|| -> Result<Poll<bool>, ()> {
-                match set.lock().poll_take(|x| x % 2 == 1) {
-                    Poll::Ready(_) => Ok(Poll::Ready(true)),
-                    Poll::Pending => Ok(Poll::Ready(false)),
+            let odd_query = poll_fn(|cx| -> Poll<bool> {
+                match set.poll_take(cx, |x| x % 2 == 1) {
+                    Poll::Ready(_) => Poll::Ready(true),
+                    Poll::Pending => Poll::Ready(false),
                 }
             });
-            let even_query = poll_fn(|| -> Result<Poll<bool>, ()> {
-                match set.lock().poll_take(|x| x % 2 == 0) {
-                    Poll::Ready(_) => Ok(Poll::Ready(true)),
-                    Poll::Pending => Ok(Poll::Ready(false)),
+            let even_query = poll_fn(|cx| -> Poll<bool> {
+                match set.poll_take(cx, |x| x % 2 == 0) {
+                    Poll::Ready(_) => Poll::Ready(true),
+                    Poll::Pending => Poll::Ready(false),
                 }
             });
 
             // Wait for all the queries to complete
-            assert_eq!(runtime.block_on(odd_query), Ok(false));
-            assert_eq!(runtime.block_on(even_query), Ok(true));
+            assert_eq!(runtime.block_on(odd_query), false);
+            assert_eq!(runtime.block_on(even_query), true);
         }
 
         // 3 (before the queries are created), 10 is inserted, and the query consumes one value.
-        assert_eq!(3, set.lock().items.len());
-        assert_eq!(3, set.lock().len());
+        assert_eq!(3, set.items.read().len());
+        assert_eq!(3, set.len());
     }
 }

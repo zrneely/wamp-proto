@@ -1,4 +1,8 @@
-//! Contains first-party transport implementations.
+//! Contains the transport trait and supporting types, as well as first-party transport implementations.
+
+use std::collections::HashMap;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use failure::Error;
@@ -48,7 +52,7 @@ pub trait Transport: Sized + Sink<TxMessage, Error = Error> + Send {
     ///
     /// This method may panic if not called under a tokio runtime. It should handle failures by returning
     /// [`Err`] from the appropriate future, or an Err() result for synchronous errors.
-    async fn connect(url: &str, rv: MessageBuffer) -> Result<Self, Error>;
+    async fn connect(url: &str, rv: Arc<MessageBuffer>) -> Result<Self, Error>;
 
     /// Spawns a long-running task which will listen for events and forward them to the
     /// [`MessageBuffer`] returned by the [`connect`] method. Multiple calls to this method
@@ -69,5 +73,111 @@ pub trait Transport: Sized + Sink<TxMessage, Error = Error> + Send {
 
     /// Closes whatever connection this has open and stops listening for incoming messages.
     /// Calling this before `listen` is undefined behavior.
-    async fn close(&mut self) -> Result<(), Error>;
+    async fn close(self: Pin<&mut Self>) -> Result<(), Error>;
+}
+
+/// The types of value which can be sent over WAMP RPC and pub/sub boundaries.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TransportableValue {
+    /// A non-negative integer.
+    Integer(u64),
+    /// A UTF-8 encoded string.
+    String(String),
+    /// A boolean value.
+    Bool(bool),
+    /// A list of other values.
+    List(Vec<TransportableValue>),
+    /// A string-to-value mapping.
+    Dict(HashMap<String, TransportableValue>),
+}
+impl TransportableValue {
+    /// Attempts to get the value, assuming it's an integer.
+    pub fn into_int(self) -> Option<u64> {
+        match self {
+            TransportableValue::Integer(x) => Some(x),
+            _ => None,
+        }
+    }
+
+    /// Attempts to get the value, assuming it's a String.
+    pub fn into_string(self) -> Option<String> {
+        match self {
+            TransportableValue::String(x) => Some(x),
+            _ => None,
+        }
+    }
+
+    /// Attempts to get the value, assuming it's a boolean.
+    pub fn into_bool(self) -> Option<bool> {
+        match self {
+            TransportableValue::Bool(x) => Some(x),
+            _ => None,
+        }
+    }
+
+    /// Attempts to get the value, assuming it's a list.
+    pub fn into_list(self) -> Option<Vec<TransportableValue>> {
+        match self {
+            TransportableValue::List(x) => Some(x),
+            _ => None,
+        }
+    }
+
+    /// Attempts to get the value, assuming it's a dictionary.
+    pub fn into_dict(self) -> Option<HashMap<String, TransportableValue>> {
+        match self {
+            TransportableValue::Dict(x) => Some(x),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TransportableValue;
+
+    #[test]
+    fn transportable_value_test() {
+        let tv = TransportableValue::Bool(true);
+        assert_eq!(Some(true), tv.clone().into_bool());
+        assert_eq!(None, tv.clone().into_dict());
+        assert_eq!(None, tv.clone().into_int());
+        assert_eq!(None, tv.clone().into_list());
+        assert_eq!(None, tv.clone().into_string());
+
+        let tv = TransportableValue::Dict(Default::default());
+        assert_eq!(None, tv.clone().into_bool());
+        assert_eq!(
+            Some(std::collections::HashMap::new()),
+            tv.clone().into_dict()
+        );
+        assert_eq!(None, tv.clone().into_int());
+        assert_eq!(None, tv.clone().into_list());
+        assert_eq!(None, tv.clone().into_string());
+
+        let tv = TransportableValue::Integer(12345);
+        assert_eq!(None, tv.clone().into_bool());
+        assert_eq!(None, tv.clone().into_dict());
+        assert_eq!(Some(12345), tv.clone().into_int());
+        assert_eq!(None, tv.clone().into_list());
+        assert_eq!(None, tv.clone().into_string());
+
+        let tv = TransportableValue::List(vec![TransportableValue::Integer(12345)]);
+        assert_eq!(None, tv.clone().into_bool());
+        assert_eq!(None, tv.clone().into_dict());
+        assert_eq!(None, tv.clone().into_int());
+        assert_eq!(
+            Some(vec![TransportableValue::Integer(12345)]),
+            tv.clone().into_list()
+        );
+        assert_eq!(None, tv.clone().into_string());
+
+        let tv = TransportableValue::String("asdf".into());
+        assert_eq!(None, tv.clone().into_bool());
+        assert_eq!(None, tv.clone().into_dict());
+        assert_eq!(None, tv.clone().into_int());
+        assert_eq!(None, tv.clone().into_list());
+        assert_eq!(Some("asdf".into()), tv.clone().into_string());
+    }
 }

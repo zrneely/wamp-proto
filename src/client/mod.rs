@@ -1,14 +1,21 @@
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Duration;
 
 use failure::Error;
-use parking_lot::Mutex;
-use tokio::{sync::oneshot, timer::Delay};
+use futures::future::poll_fn;
+use tokio::{
+    sync::{oneshot, Mutex},
+    timer::Delay,
+};
 
 use crate::{
-    error::WampError, pollable::PollableValue, transport::Transport, GlobalScope, Id,
-    MessageBuffer, RouterScope, TransportableValue as TV, Uri,
+    error::WampError,
+    pollable::PollableValue,
+    transport::{Transport, TransportableValue as TV},
+    GlobalScope, Id, MessageBuffer, RouterScope, Uri,
 };
 
 mod ops {
@@ -59,13 +66,34 @@ enum ClientState {
     TransportClosed,
 }
 
+/// If the client state ever changes to a value that fails the predicate, this
+/// will complete with an error.
+async fn watch_for_client_state_change<F, T>(
+    state: PollableValue<ClientState>,
+    is_ok: F,
+) -> Result<T, Error>
+where
+    F: FnMut(ClientState) -> bool,
+{
+    poll_fn(move |cx| {
+        let state = state.read(Some(cx));
+        if is_ok(state) {
+            Poll::Pending
+        } else {
+            error!("unexpected client state: {:?}", state);
+            Poll::Ready(Err(WampError::InvalidClientState.into()))
+        }
+    })
+    .await
+}
+
 type StopSender = oneshot::Sender<()>;
 // Tracks all of the tasks owned by a client. This is Send + Sync because StopSender is
 // Send + Sync. Mutex<T> is Send + Sync as long as T is Send, HashMap<K, V> is Send as long
 // as K and V are both Send.
 // TODO: rename to ClientResourceHandle or something
 struct ClientTaskTracker<T: Transport> {
-    sender: Mutex<T>,
+    sender: Mutex<Pin<Box<T>>>,
 
     // Used to tell the ProtocolMessageListener to stop when we're shutting down
     proto_msg_stop_sender: Mutex<Option<StopSender>>,
@@ -73,11 +101,8 @@ struct ClientTaskTracker<T: Transport> {
     #[cfg(feature = "subscriber")]
     subscriptions: Mutex<HashMap<Id<RouterScope>, StopSender>>,
 }
-impl<T> ClientTaskTracker<T>
-where
-    T: Transport,
-{
-    fn new(sender: T, proto_msg_stop_sender: StopSender) -> Arc<Self> {
+impl<T: Transport> ClientTaskTracker<T> {
+    fn new(sender: Pin<Box<T>>, proto_msg_stop_sender: StopSender) -> Arc<Self> {
         Arc::new(ClientTaskTracker {
             sender: Mutex::new(sender),
             proto_msg_stop_sender: Mutex::new(Some(proto_msg_stop_sender)),
@@ -87,47 +112,41 @@ where
         })
     }
 
-    fn get_sender(&self) -> &Mutex<T> {
-        &self.sender
+    async fn get_sender<'a>(&'a self) -> Pin<&'a mut T> {
+        (*self.sender.lock().await).as_mut()
     }
 
-    fn stop_proto_msg_listener(&self) {
-        if let Some(sender) = self.proto_msg_stop_sender.lock().take() {
+    async fn stop_proto_msg_listener(&self) {
+        if let Some(sender) = self.proto_msg_stop_sender.lock().await.take() {
             let _ = sender.send(());
         }
     }
 
-    async fn close_transport(&self) -> Result<(), Error> {
-        let mut lock = self.sender.lock();
-        Transport::close(&mut *lock).await?;
-        Ok(())
-    }
-
     #[cfg(feature = "subscriber")]
-    fn track_subscription(&self, id: Id<RouterScope>, sender: StopSender) {
-        let mut subs = self.subscriptions.lock();
+    async fn track_subscription(&self, id: Id<RouterScope>, sender: StopSender) {
+        let mut subs = self.subscriptions.lock().await;
         subs.insert(id, sender);
     }
 
     #[cfg(feature = "subscriber")]
-    fn stop_all_subscriptions(&self) {
-        let mut subs = self.subscriptions.lock();
+    async fn stop_all_subscriptions(&self) {
+        let mut subs = self.subscriptions.lock().await;
         for (_, mut sender) in subs.drain() {
             let _ = sender.send(());
         }
     }
 
     #[cfg(feature = "subscriber")]
-    fn stop_subscription(&self, id: Id<RouterScope>) {
-        let mut subs = self.subscriptions.lock();
+    async fn stop_subscription(&self, id: Id<RouterScope>) {
+        let mut subs = self.subscriptions.lock().await;
         if let Some(sender) = subs.remove(&id) {
             let _ = sender.send(());
         }
     }
 
-    fn stop_all_except_proto_msg(&self) {
+    async fn stop_all_except_proto_msg(&self) {
         #[cfg(feature = "subscriber")]
-        self.stop_all_subscriptions();
+        self.stop_all_subscriptions().await;
     }
 }
 
@@ -169,7 +188,7 @@ impl<'a> ClientConfig<'a> {
 }
 
 #[cfg(feature = "subscriber")]
-pub trait SubscriptionStream: tokio::stream::Stream<Broadcast> {
+pub trait SubscriptionStream: tokio::stream::Stream<Item = Broadcast> {
     fn get_subscription_id(&self) -> Id<RouterScope>;
 }
 
@@ -179,12 +198,10 @@ pub trait SubscriptionStream: tokio::stream::Stream<Broadcast> {
 /// selectively enabled if not all necessary (to improve compilation time) with the Cargo
 /// features `callee`, `caller`, `publisher`, and `subscriber`.
 pub struct Client<T: Transport> {
-    received: MessageBuffer,
+    received: Arc<MessageBuffer>,
 
     session_id: Id<GlobalScope>,
     // TODO: support timeouts
-    timeout_duration: Duration,
-    shutdown_timeout_duration: Duration,
     router_capabilities: RouterCapabilities,
 
     // All operations should check the state before accepting incoming messages
@@ -197,8 +214,8 @@ impl<T: Transport> std::fmt::Debug for Client<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "Client {{\n\treceived: {:?}\n\tsession_id: {:?}\n\ttimeout_duration: {:?}\n\trouter_capabilities: {:?}\n}}",
-            self.received, self.session_id, self.timeout_duration, self.router_capabilities
+            "Client {{\n\treceived: {:?}\n\tsession_id: {:?}\n\trouter_capabilities: {:?}\n}}",
+            self.received, self.session_id, self.router_capabilities
         )
     }
 }
@@ -220,8 +237,8 @@ impl<T: Transport> Client<T> {
             panic_on_drop_while_open,
             user_agent,
         } = config;
-        let received_values = MessageBuffer::default();
-        let transport = T::connect(url, received_values.clone()).await?;
+        let received_values = Arc::new(MessageBuffer::default());
+        let transport = Box::pin(T::connect(url, received_values.clone()).await?);
 
         ops::initialize::initialize(
             transport,
@@ -339,8 +356,8 @@ impl<T: Transport> Client<T> {
         // We've entered the Closed state now that CloseFuture is resolved.
         // Stop listening for incoming ABORT and GOODBYE messages and begin
         // closing the transport.
-        task_tracker.stop_proto_msg_listener();
-        task_tracker.close_transport().await?;
+        task_tracker.stop_proto_msg_listener().await;
+        task_tracker.get_sender().await.close().await?;
 
         state.write(ClientState::TransportClosed);
         Ok(())

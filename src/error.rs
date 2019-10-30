@@ -1,5 +1,3 @@
-use failure::Error;
-
 use crate::{Id, SessionScope, Uri};
 
 /// An error produced by the WAMP crate directly.
@@ -22,12 +20,8 @@ pub enum WampError {
     },
 
     /// The transport's message stream was closed.
-    #[fail(display = "transport stream closed: {}", 0)]
-    TransportStreamClosed(Error),
-
-    /// The transport's message sink was closed.
-    #[fail(display = "transport sink closed: {}", 0)]
-    TransportSinkClosed(Error),
+    #[fail(display = "transport stream closed")]
+    TransportStreamClosed,
 
     /// The router does not support a required role.
     #[fail(display = "router does not support required role")]

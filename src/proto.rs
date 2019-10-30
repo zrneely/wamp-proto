@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{GlobalScope, Id, RouterScope, SessionScope, TransportableValue, Uri};
+use crate::{transport::TransportableValue, GlobalScope, Id, RouterScope, SessionScope, Uri};
 
 /// Raw message codes for each message type.
 #[allow(missing_docs)]

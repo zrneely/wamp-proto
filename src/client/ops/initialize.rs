@@ -1,10 +1,14 @@
 use std::collections::HashMap;
-use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use failure::Error;
+use futures::{
+    future::{poll_fn, FutureExt},
+    pin_mut, select,
+    sink::SinkExt,
+};
+use tokio::prelude::*;
 use tokio::sync::oneshot;
 
 use crate::{
@@ -13,233 +17,110 @@ use crate::{
     },
     pollable::PollableValue,
     proto::TxMessage,
+    transport::TransportableValue as TV,
     uri::{known_uri, Uri},
-    TransportableValue as TV,
 };
 
-pub(in crate::client) fn listen_for_protocol_messages<T: Transport>(
-    values: MessageBuffer,
-    client_state: PollableValue<ClientState>,
+async fn protocol_listener<T: Transport>(
     task_tracker: Arc<ClientTaskTracker<T>>,
-    stop_receiver: oneshot::Receiver<()>,
-) -> impl Future<Output = ()> {
-    ProtocolMessageListener {
-        values,
-        client_state,
-        task_tracker,
-
-        state: ProtocolMessageListenerState::Ready,
-        stop_receiver,
-    }
-}
-
-#[derive(Debug)]
-enum ProtocolMessageListenerState {
-    Ready,
-
-    PrepareReplyGoodbye,
-    SendAndFlushGoodbye,
-
-    StopAllTasks,
-    CloseTransport,
-}
-
-// Used to listen for ABORT and GOODBYE messages from the router.
-struct ProtocolMessageListener<T: Transport> {
-    values: MessageBuffer,
+    received: Arc<MessageBuffer>,
     client_state: PollableValue<ClientState>,
-    task_tracker: Arc<ClientTaskTracker<T>>,
-
-    goodbye_message: Option<TxMessage>,
-    transport_close_future: Option<Box<dyn Future<Output = Result<(), Error>>>>,
-
-    state: ProtocolMessageListenerState,
     stop_receiver: oneshot::Receiver<()>,
-}
-impl<T: Transport> Future for ProtocolMessageListener<T> {
-    type Output = ();
+) {
+    // We need to poll 4 sources:
+    // - The stop listener
+    // - Transport errors
+    // - ABORT messages
+    // - GOODBYE messages (if state == Established)
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        trace!("ProtocolMessageListener wakeup");
+    let stop_listener = poll_fn(|cx| stop_receiver.poll_unpin(cx)).fuse();
+    let transport_error_listener =
+        poll_fn(|cx| received.transport_errors.poll_take(cx, |_| true)).fuse();
+    let abort_message_listener = poll_fn(|cx| received.abort.poll_take(cx, |_| true)).fuse();
+    let goodbye_message_listener = poll_fn(|cx| received.goodbye.poll_take(cx, |_| true)).fuse();
 
-        loop {
-            // Poll for manual shutdown.
-            match self.stop_receiver.poll(cx) {
-                Poll::Pending => {}
-                // Either we've been told to stop or the sender was dropped,
-                // in which case we should stop anyway.
-                Poll::Ready(Ok(())) => {
-                    debug!("ProtocolMessageListener told to stop!");
-                    return Poll::Ready(());
-                }
-                Poll::Ready(Err(err)) => {
-                    error!("ProtocolMessageListener stop listener broken: {}", err);
-                    return Poll::Ready(());
-                }
+    pin_mut!(
+        stop_listener,
+        transport_error_listener,
+        abort_message_listener,
+        goodbye_message_listener
+    );
+
+    select! {
+        sl = stop_listener => {
+            // When the stop listener fires, we immediately exit.
+            if let Err(error) = sl {
+                error!("Protocol message stop listener errored: {}", error);
             }
+        }
 
-            // Poll for transport errors
-            match self.values.transport_errors.lock().poll_take(cx, |_| true) {
-                Poll::Pending => {}
-                Poll::Ready(error) => {
-                    error!("Fatal transport error: {}", error);
-                    self.client_state.write(ClientState::TransportClosed);
-                    self.state = ProtocolMessageListenerState::StopAllTasks;
-                }
-            }
+        transport_err = transport_error_listener => {
+            // When we receive a transport error, set the client state to TransportClosed
+            // and stop all tasks. We explicitly do NOT close() the Transport.
+            error!("Transport error received: {}", transport_err);
+            client_state.write(ClientState::TransportClosed);
+            task_tracker.stop_all_except_proto_msg();
+        }
 
-            // Notably, we don't poll for the client state changing - we'll be notified via
-            // the stop listener of any significant changes to client state.
+        abort_msg = abort_message_listener => {
+            // When we receive an ABORT message, we need to set the client state to Closed,
+            // stop all tasks, close the transport, and finally set the state to TransportClosed.
+            warn!("ABORT message received. Reason: {}, details: {:?}", abort_msg.reason, abort_msg.details);
+            client_state.write(ClientState::Closed);
+            task_tracker.stop_all_except_proto_msg();
+            task_tracker.get_sender().await.close().await;
+            client_state.write(ClientState::TransportClosed);
+        }
 
-            // Process the state machine
-            let mut pending = false;
-            self.state = match self.state {
-                ProtocolMessageListenerState::Ready => {
-                    // Poll for ABORT
-                    match self.values.abort.lock().poll_take(cx, |_| true) {
-                        Poll::Ready(msg) => {
-                            warn!(
-                                "Received ABORT from router: \"{:?}\" ({:?})",
-                                msg.reason, msg.details
-                            );
-                            self.client_state.write(ClientState::Closed);
-                            ProtocolMessageListenerState::StopAllTasks
-                        }
+        goodbye_msg = goodbye_message_listener => {
+            // Only pay attention if the current state is Established.
+            info!("GOODBYE message received. Reason: {}, details: {:?}", goodbye_msg.reason, goodbye_msg.details);
 
-                        // Poll for GOODBYEs, but only while we're in the "Established" state. Don't eat
-                        // expected GOODBYEs. We can't poll for ones that don't match the expected response
-                        // to a client-initiated GOODBYE because then we leave ourselves open to a hang
-                        // while connected to a badly-behaved router.
-                        //
-                        // Also, we don't care if the client state changes. We'll be notified via our stop
-                        // listener.
-                        Poll::Pending => {
-                            if self.client_state.read(None) == ClientState::Established {
-                                match self.values.goodbye.lock().poll_take(|_| true) {
-                                    Poll::Ready(msg) => {
-                                        info!(
-                                            "Received GOODBYE from router: \"{:?}\" ({:?})",
-                                            msg.reason, msg.details
-                                        );
-                                        self.client_state.write(ClientState::Closing);
-                                        self.goodbye_message = Some(TxMessage::Goodbye {
-                                            details: HashMap::new(),
-                                            reason: Uri::raw(
-                                                known_uri::session_close::goodbye_and_out
-                                                    .to_string(),
-                                            ),
-                                        });
-                                        ProtocolMessageListenerState::StartReplyGoodbye
-                                    }
-                                    Poll::Pending => {
-                                        pending = true;
-                                        ProtocolMessageListenerState::Ready
-                                    }
-                                }
-                            } else {
-                                // If we're not in the "Established" state, then act as though
-                                // we polled and didn't get anything.
-                                pending = true;
-                                ProtocolMessageListenerState::Ready
-                            }
-                        }
-                    }
+            if client_state.read(None) == ClientState::Established {
+                // We need to set the client state to Closing, send a GOODBYE response, stop all
+                // tasks, close the transport, and set the client state to TransportClosed.
+                client_state.write(ClientState::Closing);
+
+                {
+                    let sender = task_tracker.get_sender().await;
+                    poll_fn(|cx| task_tracker.poll_ready(cx)).await?;
+                    sender.start_send(TxMessage::Goodbye {
+                        details: HashMap::new(),
+                        reason: Uri::raw(
+                            known_uri::session_close::goodbye_and_out
+                                .to_string(),
+                        )
+                    })?;
                 }
 
-                ProtocolMessageListenerState::PrepareReplyGoodbye => {
-                    debug!("ProtocolMessageListenerState sending GOODBYE response");
-                    match self.task_tracker.get_sender().lock().poll_ready(cx) {
-                        Poll::Pending => {
-                            pending = true;
-                            ProtocolMessageListenerState::PrepareReplyGoodbye
-                        }
-                        Poll::Ready(Ok(())) => ProtocolMessageListenerState::SendAndFlushGoodbye,
-                        Poll::Ready(Err(error)) => {
-                            error!("Failed to prepare to reply with GOODBYE: {}", error);
-                            return Poll::Ready(());
-                        }
-                    }
+                {
+                    let sender = task_tracker.get_sender().await;
+                    poll_fn(|cx| task_tracker.poll_flush(cx)).await?;
                 }
 
-                ProtocolMessageListenerState::SendAndFlushGoodbye => {
-                    if let Some(message) = self.goodbye_message.take() {
-                        match self.task_tracker.get_sender().lock().start_send(message) {
-                            Ok(_) => {}
-                            Err(error) => {
-                                error!("Failed to reply with GOODBYE: {}", error);
-                                return Poll::Ready(());
-                            }
-                        }
-                    }
-
-                    match self.task_tracker.get_sender().lock().poll_flush(cx) {
-                        Poll::Pending => {
-                            pending = true;
-                            ProtocolMessageListenerState::SendAndFlushGoodbye;
-                        }
-                        Poll::Ready(Ok(())) => ProtocolMessageListenerState::StopAllTasks,
-                        Poll::Ready(Err(error)) => {
-                            error!("Failed to flush when replying GOODBYE: {}", error);
-                            return Poll::Ready(());
-                        }
-                    }
-                }
-
-                ProtocolMessageListenerState::StopAllTasks => {
-                    info!("ProtocolMessageListener stopping all tasks!");
-                    self.task_tracker.stop_all_except_proto_msg();
-
-                    if self.client_state.read(None) == ClientState::TransportClosed {
-                        // This is the case if the transport intitated the close by pushing to
-                        // the transport_errors queue. In that case, the contract is to *not*
-                        // call close() on it. Once we return, all client tasks should be stopped.
-                        return Poll::Ready(());
-                    } else {
-                        self.transport_close_future = Some(self.task_tracker.close_transport());
-                        ProtocolMessageListenerState::CloseTransport
-                    }
-                }
-
-                ProtocolMessageListenerState::CloseTransport => {
-                    match self.transport_close_future.as_mut().unwrap().poll() {
-                        Poll::Pending => {
-                            pending = true;
-                            trace!(
-                                "ProtocolMessageListener waiting for Transport::close to finish"
-                            );
-                            ProtocolMessageListenerState::CloseTransport
-                        }
-                        Poll::Ready(Ok(())) => {
-                            self.client_state.write(ClientState::TransportClosed);
-                            return Poll::Ready(());
-                        }
-                        Poll::Ready(Err(error)) => {
-                            error!("Error driving transport close future: {}", error);
-                            return Poll::Ready(());
-                        }
-                    }
-                }
-            };
-
-            if pending {
-                return Poll::Pending;
+                task_tracker.stop_all_except_proto_msg();
+                task_tracker.get_sender().await.close().await;
+                client_state.write(ClientState::TransportClosed);
+            } else {
+                warn!("Ignoring GOODBYE message since client state is not Established");
             }
         }
     }
 }
 
-pub(in crate::client) fn initialize<T: Transport>(
-    mut sender: T,
-    received: MessageBuffer,
+pub(in crate::client) async fn initialize<T: 'static + Transport>(
+    mut sender: Pin<Box<T>>,
+    received: Arc<MessageBuffer>,
     realm: Uri,
     panic_on_drop_while_open: bool,
     user_agent: Option<String>,
-) -> impl Future<Output = Result<Client<T>, Error>> {
-    sender.listen();
+) -> Result<Client<T>, Error> {
+    sender.listen(); // TODO: should this move into Transport::connect?
 
-    InitializeFuture {
-        state: InitializeFutureState::StartSendHello,
-        message: Some(TxMessage::Hello {
+    // Send the hello message.
+    sender
+        .as_mut()
+        .send(TxMessage::Hello {
             realm,
             details: {
                 let mut details = HashMap::new();
@@ -266,123 +147,36 @@ pub(in crate::client) fn initialize<T: Transport>(
 
                 details
             },
-        }),
+        })
+        .await?;
+
+    // Wait for the response.
+    let welcome_msg = poll_fn(|cx| received.welcome.poll_take(cx, |_| true)).await;
+
+    info!(
+        "WAMP connection established with session ID {:?}",
+        welcome_msg.session
+    );
+
+    let (stop_sender, stop_receiver) = oneshot::channel();
+    let task_tracker = ClientTaskTracker::new(sender, stop_sender);
+    let client_state = PollableValue::new(ClientState::Established);
+
+    tokio::spawn(protocol_listener(
+        task_tracker.clone(),
+        received.clone(),
+        client_state.clone(),
+        stop_receiver,
+    ));
+
+    Ok(Client {
+        received,
+        session_id: welcome_msg.session,
 
         panic_on_drop_while_open,
-        sender: Some(sender),
-        received,
-    }
-}
+        router_capabilities: RouterCapabilities::from_details(&welcome_msg.details),
 
-#[derive(Debug)]
-enum InitializeFutureState {
-    PrepareSendHello,
-    SendAndFlushHello,
-    WaitWelcome,
-}
-
-struct InitializeFuture<T: Transport + 'static> {
-    state: InitializeFutureState,
-    message: Option<TxMessage>,
-
-    // client properties
-    panic_on_drop_while_open: bool,
-
-    sender: Option<T>,
-    received: MessageBuffer,
-}
-impl<T> Future for InitializeFuture<T>
-where
-    T: Transport + 'static,
-{
-    type Output = Result<Client<T>, Error>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<Client<T>, Error>> {
-        loop {
-            trace!("InitializeFuture: {:?}", self.state);
-
-            let mut pending = false;
-            self.state = match self.state {
-                // Step 1: Wait for the sender's message queue to be ready.
-                InitializeFutureState::PrepareSendHello => {
-                    match self.sender.as_mut().unwrap().poll_ready(cx) {
-                        Poll::Pending => {
-                            pending = true;
-                            InitializeFutureState::PrepareSendHello
-                        }
-                        Poll::Ready(Ok(())) => InitializeFutureState::SendAndFlushHello,
-                        Poll::Ready(Err(error)) => {
-                            error!("Failed to prepare to send HELLO: {}", error);
-                            return Poll::Ready(Err(error));
-                        }
-                    }
-                }
-
-                // Step 2: Send the message and wait for it to flush.
-                InitializeFutureState::SendAndFlushHello => {
-                    if let Some(message) = self.message.take() {
-                        self.sender.as_mut().unwrap().start_send(message)?;
-                    }
-
-                    match self.sender.as_mut().unwrap().poll_flush(cx) {
-                        Poll::Pending => {
-                            pending = true;
-                            InitializeFutureState::SendAndFlushHello
-                        }
-                        Poll::Ready(Ok(())) => InitializeFutureState::WaitWelcome,
-                        Poll::Ready(Err(error)) => {
-                            error!("Failed to send HELLO: {}", error);
-                            return Poll::Ready(Err(error));
-                        }
-                    }
-                }
-
-                // Step 3: Wait for a rx::Welcome message.
-                InitializeFutureState::WaitWelcome => {
-                    match self.received.welcome.lock().poll_take(|_| true) {
-                        Poll::Pending => {
-                            pending = true;
-                            InitializeFutureState::WaitWelcome
-                        }
-                        Poll::Ready(msg) => {
-                            info!(
-                                "WAMP connection established with session ID {:?}",
-                                msg.session
-                            );
-
-                            let (stop_sender, receiver) = oneshot::channel();
-                            let task_tracker =
-                                ClientTaskTracker::new(self.sender.take().unwrap(), stop_sender);
-                            let client_state = PollableValue::new(ClientState::Established);
-
-                            tokio::spawn(listen_for_protocol_messages(
-                                self.received.clone(),
-                                client_state.clone(),
-                                task_tracker.clone(),
-                                receiver,
-                            ));
-
-                            return Ok(Poll::Ready(Client {
-                                received: self.received.clone(),
-
-                                session_id: msg.session,
-                                timeout_duration: self.timeout_duration,
-                                shutdown_timeout_duration: self.shutdown_timeout_duration,
-                                panic_on_drop_while_open: self.panic_on_drop_while_open,
-                                router_capabilities: RouterCapabilities::from_details(&msg.details),
-
-                                // We've already sent our "hello" and received our "welcome".
-                                state: client_state,
-                                task_tracker,
-                            }));
-                        }
-                    }
-                }
-            };
-
-            if pending {
-                return Poll::Pending;
-            }
-        }
-    }
+        state: client_state,
+        task_tracker,
+    })
 }
