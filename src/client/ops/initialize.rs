@@ -116,7 +116,10 @@ pub(in crate::client) async fn initialize<T: 'static + Transport>(
     panic_on_drop_while_open: bool,
     user_agent: Option<String>,
 ) -> Result<Client<T>, Error> {
-    sender.listen(); // TODO: should this move into Transport::connect?
+    // TODO: should this move into Transport::connect? Should it be provided by this crate
+    // instead of Transport impls, which just produce a Stream<RxMessage> that are adapted
+    // by code in Client<T> to populate the MessageBuffer?
+    sender.listen();
 
     // Send the hello message.
     sender
