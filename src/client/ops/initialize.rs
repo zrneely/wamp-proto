@@ -46,6 +46,7 @@ async fn protocol_listener<T: Transport>(
         goodbye_message_listener
     );
 
+    // This "select" is the reason the recursion limit is set to 512 in lib.rs.
     select! {
         sl = stop_listener => {
             // When the stop listener fires, we immediately exit.

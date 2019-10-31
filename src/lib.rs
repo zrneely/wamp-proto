@@ -8,7 +8,7 @@
 
 #![deny(missing_docs)]
 #![allow(dead_code)]
-#![recursion_limit = "512"]
+#![recursion_limit = "512"] // for a big select! in client/ops/initialize.rs
 
 #[macro_use]
 extern crate failure_derive;

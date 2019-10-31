@@ -363,7 +363,7 @@ impl<T: Transport> Client<T> {
         Ok(())
     }
 
-    /// Returns true if the client is, at the instant of querying, open and ready.
+    /// Returns true if the client is, at the instant of querying, in the TransportClosed state.
     pub fn is_transport_closed(&self) -> bool {
         self.state.read(None) == ClientState::TransportClosed
     }
