@@ -134,6 +134,11 @@ impl<T> PollableSet<T> {
         }
     }
 
+    /// Synchronously removes all items from the queue.
+    pub fn clear(&self) {
+        self.items.write().clear()
+    }
+
     /// Inserts a value into the set. This will trigger a notification for every task which has
     /// previously called poll_take and received [`Poll::Pending`].
     pub fn insert(&self, value: T) {

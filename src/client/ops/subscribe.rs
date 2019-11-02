@@ -13,6 +13,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     client::{watch_for_client_state_change, Broadcast, Client, ClientTaskTracker},
+    pollable::PollableSet,
     proto::TxMessage,
     transport::Transport,
     Id, MessageBuffer, RouterScope, SessionScope, SubscriptionStream, Uri,
@@ -57,9 +58,14 @@ async fn subscribe_impl<T: Transport>(
         subscription_id: msg.subscription,
     };
 
-    // This is used to allow the client to stop existing subscriptions
-    // when it is closed.
+    // Create an EVENT queue for our subscription, and allow
+    // the client to stop the stream.
+    received
+        .event
+        .write()
+        .insert(msg.subscription, PollableSet::default());
     task_tracker.track_subscription(msg.subscription, sender);
+
     Ok(subscription_stream)
 }
 
@@ -110,10 +116,19 @@ impl Stream for SubscriptionStreamImpl {
         match self
             .values
             .event
-            .poll_take(cx, |evt| evt.subscription == self.subscription_id)
+            .read()
+            .get(&self.subscription_id)
+            .map(|queue| queue.poll_take_any(cx))
         {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(message) => Poll::Ready(Some(Broadcast {
+            None => {
+                error!(
+                    "EVENT queue map is missing entry for subscription ID {:?}",
+                    self.subscription_id
+                );
+                Poll::Ready(None)
+            }
+            Some(Poll::Pending) => Poll::Pending,
+            Some(Poll::Ready(message)) => Poll::Ready(Some(Broadcast {
                 arguments: message.arguments.unwrap_or_default(),
                 arguments_kw: message.arguments_kw.unwrap_or_default(),
             })),

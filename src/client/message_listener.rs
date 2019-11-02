@@ -298,9 +298,14 @@ fn process_message(
         #[cfg(feature = "subscriber")]
         RxMessage::Event(event) => {
             if client_state.is_established() {
-                trace!("Received EVENT: {:?}", event);
-                received.event.insert(event);
-                ProcessMessageResult::Continue
+                if let Some(event_queue) = received.event.read().get(&event.subscription) {
+                    trace!("Received EVENT: {:?}", event);
+                    event_queue.insert(event);
+                    ProcessMessageResult::Continue
+                } else {
+                    warn!("Received EVENT for unknown subscription ID: {:?}", event);
+                    ProcessMessageResult::ProtocolError
+                }
             } else {
                 warn!("Received EVENT with no active session: {:?}", event);
                 ProcessMessageResult::ProtocolError

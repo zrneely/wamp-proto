@@ -23,10 +23,12 @@ extern crate serde_derive;
 #[macro_use]
 extern crate serde_json;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use parking_lot::RwLock;
 use rand::{thread_rng, Rng};
 
 #[cfg(feature = "ws_transport")]
@@ -202,9 +204,9 @@ pub struct MessageBuffer {
     /// The buffer of incoming "UNSUBSCRIBED" messages.
     #[cfg(feature = "subscriber")]
     pub unsubscribed: PollableSet<rx::Unsubscribed>,
-    /// The buffer of incoming "EVENT" messages.
+    /// The buffer of incoming "EVENT" messages; a map from subscription ID -> incoming EVENT.
     #[cfg(feature = "subscriber")]
-    pub event: PollableSet<rx::Event>,
+    pub event: RwLock<HashMap<Id<RouterScope>, PollableSet<rx::Event>>>,
 
     /// The buffer of incoming "PUBLISHED" messages.
     #[cfg(feature = "publisher")]

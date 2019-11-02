@@ -15,9 +15,9 @@ use crate::{
     Id, MessageBuffer, SessionScope, SubscriptionStream,
 };
 
-async fn unsubscribe_impl<T: Transport, S: SubscriptionStream>(
+async fn unsubscribe_impl<T: Transport>(
     task_tracker: Arc<ClientTaskTracker<T>>,
-    subscription: S,
+    subscription: impl SubscriptionStream,
     received: Arc<MessageBuffer>,
 ) -> Result<(), Error> {
     let request_id = Id::<SessionScope>::next();
@@ -37,7 +37,8 @@ async fn unsubscribe_impl<T: Transport, S: SubscriptionStream>(
     }
 
     // Wait for an UNSUBSCRIBED message to come in, confirming the unsubscription.
-    // After this await, there should be no new EVENTs.
+    // After this await, there should be no new EVENTs, so it's safe to clean up
+    // the EVENT queue.
     poll_fn(|cx| {
         received
             .unsubscribed
@@ -45,11 +46,11 @@ async fn unsubscribe_impl<T: Transport, S: SubscriptionStream>(
     })
     .await;
 
-    // Drain any unprocessed messages in the EVENT queue that would have been
-    // handled by this subscription to avoid leaking memory.
+    // Clean up the event queue and SubscriptionStream.
     received
         .event
-        .drain(|msg| msg.subscription == subscription.get_subscription_id());
+        .write()
+        .remove(&subscription.get_subscription_id());
     task_tracker.stop_subscription(subscription.get_subscription_id());
 
     Ok(())
