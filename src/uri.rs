@@ -13,6 +13,12 @@ pub mod known_uri {
         };
     }
 
+    // Defined in section 5.3.3
+    w_uri!(
+        "Used when a peer commits a protocol violation.",
+        protocol_violation
+    );
+
     /// URIs defined in section 11.1.2, which deal with receiving invalid URIs.
     pub mod interaction {
         w_uri!("Used when a peer provides an invalid URI.", invalid_uri);

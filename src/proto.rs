@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{transport::TransportableValue, GlobalScope, Id, RouterScope, SessionScope, Uri};
 
@@ -10,21 +10,89 @@ mod msg_code {
     pub const ABORT: u64 = 3;
     pub const GOODBYE: u64 = 6;
     pub const ERROR: u64 = 8;
+
+    #[cfg(feature = "publisher")]
     pub const PUBLISH: u64 = 16;
+    #[cfg(feature = "publisher")]
     pub const PUBLISHED: u64 = 17;
+
+    #[cfg(feature = "subscriber")]
     pub const SUBSCRIBE: u64 = 32;
+    #[cfg(feature = "subscriber")]
     pub const SUBSCRIBED: u64 = 33;
+    #[cfg(feature = "subscriber")]
     pub const UNSUBSCRIBE: u64 = 34;
+    #[cfg(feature = "subscriber")]
     pub const UNSUBSCRIBED: u64 = 35;
+    #[cfg(feature = "subscriber")]
     pub const EVENT: u64 = 36;
+
+    #[cfg(feature = "caller")]
     pub const CALL: u64 = 48;
+    #[cfg(feature = "caller")]
     pub const RESULT: u64 = 50;
+
+    #[cfg(feature = "callee")]
     pub const REGISTER: u64 = 64;
+    #[cfg(feature = "callee")]
     pub const REGISTERED: u64 = 65;
+    #[cfg(feature = "callee")]
     pub const UNREGISTER: u64 = 66;
+    #[cfg(feature = "callee")]
     pub const UNREGISTERED: u64 = 67;
+    #[cfg(feature = "callee")]
     pub const INVOCATION: u64 = 68;
+    #[cfg(feature = "callee")]
     pub const YIELD: u64 = 70;
+}
+
+/// Determines if the specified integer is a valid message code.
+pub fn is_valid_msg_code(code: u64) -> bool {
+    lazy_static! {
+        static ref VALID_CODES: HashSet<u64> = {
+            let mut valid_codes = HashSet::with_capacity(19);
+
+            valid_codes.insert(msg_code::HELLO);
+            valid_codes.insert(msg_code::WELCOME);
+            valid_codes.insert(msg_code::ABORT);
+            valid_codes.insert(msg_code::ERROR);
+
+            #[cfg(feature = "publisher")]
+            {
+                valid_codes.insert(msg_code::PUBLISH);
+                valid_codes.insert(msg_code::PUBLISHED);
+            }
+
+            #[cfg(feature = "subscriber")]
+            {
+                valid_codes.insert(msg_code::SUBSCRIBE);
+                valid_codes.insert(msg_code::SUBSCRIBED);
+                valid_codes.insert(msg_code::UNSUBSCRIBE);
+                valid_codes.insert(msg_code::UNSUBSCRIBED);
+                valid_codes.insert(msg_code::EVENT);
+            }
+
+            #[cfg(feature = "caller")]
+            {
+                valid_codes.insert(msg_code::CALL);
+                valid_codes.insert(msg_code::RESULT);
+            }
+
+            #[cfg(feature = "callee")]
+            {
+                valid_codes.insert(msg_code::REGISTER);
+                valid_codes.insert(msg_code::REGISTERED);
+                valid_codes.insert(msg_code::UNREGISTER);
+                valid_codes.insert(msg_code::UNREGISTERED);
+                valid_codes.insert(msg_code::INVOCATION);
+                valid_codes.insert(msg_code::YIELD);
+            }
+
+            valid_codes
+        };
+    }
+
+    VALID_CODES.contains(&code)
 }
 
 type Dict = HashMap<String, TransportableValue>;
@@ -66,6 +134,14 @@ pub enum TxMessage {
         arguments: Option<List>,
         /// A dictionary of key-value data.
         arguments_kw: Option<Dict>,
+    },
+
+    /// Sent in response to a protocol error.
+    Abort {
+        /// Allow providing optional, additional information.
+        details: Dict,
+        /// A somewhat known URI describing why the session is being aborted.
+        reason: Uri,
     },
 
     /// Sent by publishers to brokers when they have a message to send.
@@ -332,14 +408,41 @@ pub mod rx {
             pub struct $name {
                 $($fields)*
             }
-            impl RxMessage for $name {
+            impl ReceivedMessage for $name {
                 const MSG_CODE: u64 = msg_code::$code_name;
             }
         };
     }
 
+    pub enum RxMessage {
+        Welcome(Welcome),
+        Abort(Abort),
+        Goodbye(Goodbye),
+        Error(Error),
+
+        #[cfg(feature = "subscriber")]
+        Subscribed(Subscribed),
+        #[cfg(feature = "subscriber")]
+        Unsubscribed(Unsubscribed),
+        #[cfg(feature = "subscriber")]
+        Event(Event),
+
+        #[cfg(feature = "publisher")]
+        Published(Published),
+
+        #[cfg(feature = "callee")]
+        Registered(Registered),
+        #[cfg(feature = "callee")]
+        Unregistered(Unregistered),
+        #[cfg(feature = "callee")]
+        Invocation(Invocation),
+
+        #[cfg(feature = "caller")]
+        Result(Result),
+    }
+
     /// Marker trait for received messages. Do not implement this yourself.
-    pub trait RxMessage {
+    pub trait ReceivedMessage {
         /// The identifying integer for this message.
         const MSG_CODE: u64;
     }

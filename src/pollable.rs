@@ -130,7 +130,7 @@ impl<T> PollableSet<T> {
     }
 
     /// Inserts a value into the set. This will trigger a notification for every task which has
-    /// previously called poll_take and received [`Async::Pending`].
+    /// previously called poll_take and received [`Poll::Pending`].
     pub fn insert(&self, value: T) {
         self.items.write().push(value);
 

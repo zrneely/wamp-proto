@@ -27,7 +27,6 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use failure::Error;
 use rand::{thread_rng, Rng};
 
 #[cfg(feature = "ws_transport")]
@@ -171,16 +170,12 @@ impl Id<SessionScope> {
 /// (either in the transport layer or the protocol).
 #[derive(Default, Debug)]
 pub struct MessageBuffer {
-    /// The queue of incoming "WELCOME" messages.
-    pub welcome: PollableSet<rx::Welcome>,
-    /// The buffer of incoming "ABORT" messages.
-    pub abort: PollableSet<rx::Abort>,
-    /// The buffer of incoming "GOODBYE" messages.
+    /// The buffer of incoming "GOODBYE" messages. This is not populated with
+    /// messages unless the client triggered the disconned.
     pub goodbye: PollableSet<rx::Goodbye>,
+
     /// The buffer of incoming "ERROR" messages.
-    pub error: PollableSet<rx::Error>,
-    /// The buffer of incoming fatal transport issues.
-    pub transport_errors: PollableSet<Error>,
+    pub error: PollableSet<rx::Error>, // TODO: should this be message-type specific?
 
     /// The buffer of incoming "SUBSCRIBED" messages.
     #[cfg(feature = "subscriber")]

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use failure::Error;
@@ -21,17 +22,17 @@ async fn close_impl<T: Transport>(
     received: Arc<MessageBuffer>,
 ) -> Result<(), Error> {
     {
-        let sender = task_tracker.get_sender().await;
-        poll_fn(|cx| sender.poll_ready(cx)).await?;
-        sender.start_send(TxMessage::Goodbye {
+        let sender = task_tracker.lock_sender().await;
+        poll_fn(|cx| Pin::new(&mut sender).poll_ready(cx)).await?;
+        Pin::new(&mut sender).start_send(TxMessage::Goodbye {
             details: HashMap::default(),
             reason,
         })?;
     }
 
     {
-        let sender = task_tracker.get_sender().await;
-        poll_fn(|cx| sender.poll_flush(cx)).await?;
+        let sender = task_tracker.lock_sender().await;
+        poll_fn(|cx| Pin::new(&mut sender).poll_flush(cx)).await?;
     }
 
     // Wait for a goodbye message to come in, confirming the disconnect.

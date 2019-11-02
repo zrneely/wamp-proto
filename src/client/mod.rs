@@ -1,15 +1,11 @@
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
 use failure::Error;
-use futures::future::poll_fn;
-use tokio::{
-    sync::{oneshot, Mutex},
-    timer::Delay,
-};
+use futures::{future::poll_fn, SinkExt};
+use tokio::sync::{oneshot, Mutex};
 
 use crate::{
     error::WampError,
@@ -18,6 +14,7 @@ use crate::{
     GlobalScope, Id, MessageBuffer, RouterScope, Uri,
 };
 
+mod message_listener;
 mod ops {
     pub mod close;
     pub mod initialize;
@@ -29,16 +26,6 @@ mod ops {
 
     #[cfg(feature = "publisher")]
     pub mod publish;
-}
-
-// helper for most operations
-fn check_for_timeout(timeout: &mut Delay) -> Result<(), Error> {
-    if timeout.is_elapsed() {
-        info!("Timeout detected!");
-        Err(WampError::Timeout.into())
-    } else {
-        Ok(())
-    }
 }
 
 // The states a client can be in, according to the WAMP specification.
@@ -57,13 +44,24 @@ enum ClientState {
     Authenticating,
     // The connection is established and PUB/SUB and/or RPC messages can be exchanged with
     // the router freely.
-    Established,
+    Established {
+        session_id: Id<GlobalScope>,
+        router_capabilities: RouterCapabilities,
+    },
     // The client initiated a clean connection termination, and the router has not yet responded.
     ShuttingDown,
     // The router initiated a clean connection termination, and the client has not yet responded.
     Closing,
     // We're completely done; the transport is closed.
     TransportClosed,
+}
+impl ClientState {
+    pub fn is_established(&self) -> bool {
+        match self {
+            ClientState::Established { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 /// If the client state ever changes to a value that fails the predicate, this
@@ -93,31 +91,31 @@ type StopSender = oneshot::Sender<()>;
 // as K and V are both Send.
 // TODO: rename to ClientResourceHandle or something
 struct ClientTaskTracker<T: Transport> {
-    sender: Mutex<Pin<Box<T>>>,
+    sender: Mutex<T::Sink>,
 
-    // Used to tell the ProtocolMessageListener to stop when we're shutting down
-    proto_msg_stop_sender: Mutex<Option<StopSender>>,
+    // Used to tell the message listener to stop when a locally-initiated shutdown occurs.
+    msg_listener_stop_sender: Mutex<Option<StopSender>>,
 
     #[cfg(feature = "subscriber")]
     subscriptions: Mutex<HashMap<Id<RouterScope>, StopSender>>,
 }
 impl<T: Transport> ClientTaskTracker<T> {
-    fn new(sender: Pin<Box<T>>, proto_msg_stop_sender: StopSender) -> Arc<Self> {
+    fn new(sender: T::Sink, proto_msg_stop_sender: StopSender) -> Arc<Self> {
         Arc::new(ClientTaskTracker {
             sender: Mutex::new(sender),
-            proto_msg_stop_sender: Mutex::new(Some(proto_msg_stop_sender)),
+            msg_listener_stop_sender: Mutex::new(Some(proto_msg_stop_sender)),
 
             #[cfg(feature = "subscriber")]
             subscriptions: Mutex::new(HashMap::new()),
         })
     }
 
-    async fn get_sender<'a>(&'a self) -> Pin<&'a mut T> {
-        (*self.sender.lock().await).as_mut()
+    async fn lock_sender<'a>(&'a self) -> &'a mut T::Sink {
+        &mut *self.sender.lock().await
     }
 
     async fn stop_proto_msg_listener(&self) {
-        if let Some(sender) = self.proto_msg_stop_sender.lock().await.take() {
+        if let Some(sender) = self.msg_listener_stop_sender.lock().await.take() {
             let _ = sender.send(());
         }
     }
@@ -144,7 +142,7 @@ impl<T: Transport> ClientTaskTracker<T> {
         }
     }
 
-    async fn stop_all_except_proto_msg(&self) {
+    async fn stop_all_except_message_listener(&self) {
         #[cfg(feature = "subscriber")]
         self.stop_all_subscriptions().await;
     }
@@ -187,6 +185,7 @@ impl<'a> ClientConfig<'a> {
     }
 }
 
+// TODO: move to subscribe.rs and re-export it here.
 #[cfg(feature = "subscriber")]
 pub trait SubscriptionStream: tokio::stream::Stream<Item = Broadcast> {
     fn get_subscription_id(&self) -> Id<RouterScope>;
@@ -200,9 +199,7 @@ pub trait SubscriptionStream: tokio::stream::Stream<Item = Broadcast> {
 pub struct Client<T: Transport> {
     received: Arc<MessageBuffer>,
 
-    session_id: Id<GlobalScope>,
     // TODO: support timeouts
-    router_capabilities: RouterCapabilities,
 
     // All operations should check the state before accepting incoming messages
     state: PollableValue<ClientState>,
@@ -237,17 +234,9 @@ impl<T: Transport> Client<T> {
             panic_on_drop_while_open,
             user_agent,
         } = config;
-        let received_values = Arc::new(MessageBuffer::default());
-        let transport = Box::pin(T::connect(url, received_values.clone()).await?);
+        let (sink, stream) = T::connect(url).await?;
 
-        ops::initialize::initialize(
-            transport,
-            received_values,
-            realm,
-            panic_on_drop_while_open,
-            user_agent,
-        )
-        .await
+        ops::initialize::initialize(sink, stream, realm, panic_on_drop_while_open, user_agent).await
     }
 
     //#[cfg(feature = "caller")]
@@ -279,10 +268,21 @@ impl<T: Transport> Client<T> {
     /// of sending the message is complete.
     #[cfg(feature = "publisher")]
     pub async fn publish(&mut self, topic: Uri, broadcast: Broadcast) -> Result<(), Error> {
-        if !self.router_capabilities.broker {
-            Err(WampError::RouterSupportMissing.into())
-        } else {
-            ops::publish::publish(self, topic, broadcast).await
+        match self.state.read(None) {
+            ClientState::Established {
+                router_capabilities,
+                ..
+            } => {
+                if router_capabilities.broker {
+                    ops::publish::publish(self, topic, broadcast).await
+                } else {
+                    Err(WampError::RouterSupportMissing.into())
+                }
+            }
+            state => {
+                warn!("Tried to publish when client state was {:?}", state);
+                Err(WampError::InvalidClientState.into())
+            }
         }
     }
 
@@ -320,10 +320,21 @@ impl<T: Transport> Client<T> {
     /// future will resolve with an error.
     #[cfg(feature = "subscriber")]
     pub async fn subscribe(&mut self, topic: Uri) -> Result<impl SubscriptionStream, Error> {
-        if !self.router_capabilities.broker {
-            Err(WampError::RouterSupportMissing.into())
-        } else {
-            ops::subscribe::subscribe(self, topic).await
+        match self.state.read(None) {
+            ClientState::Established {
+                router_capabilities,
+                ..
+            } => {
+                if router_capabilities.broker {
+                    ops::subscribe::subscribe(self, topic).await
+                } else {
+                    Err(WampError::RouterSupportMissing.into())
+                }
+            }
+            state => {
+                warn!("Tried to subscribe when client state was {:?}", state);
+                Err(WampError::InvalidClientState.into())
+            }
         }
     }
 
@@ -332,10 +343,21 @@ impl<T: Transport> Client<T> {
         &mut self,
         subscription: S,
     ) -> Result<(), Error> {
-        if !self.router_capabilities.broker {
-            Err(WampError::RouterSupportMissing.into())
-        } else {
-            ops::unsubscribe::unsubscribe(self, subscription).await
+        match self.state.read(None) {
+            ClientState::Established {
+                router_capabilities,
+                ..
+            } => {
+                if router_capabilities.broker {
+                    ops::unsubscribe::unsubscribe(self, subscription).await
+                } else {
+                    Err(WampError::RouterSupportMissing.into())
+                }
+            }
+            state => {
+                warn!("Tried to unsubscribe when client state was {:?}", state);
+                Err(WampError::InvalidClientState.into())
+            }
         }
     }
 
@@ -346,8 +368,8 @@ impl<T: Transport> Client<T> {
     pub async fn close(&mut self, reason: Uri) -> Result<(), Error> {
         self.state.write(ClientState::ShuttingDown);
 
-        // Stop listening for incoming events and RPC invocations.
-        self.task_tracker.stop_all_except_proto_msg();
+        // Stop listening for incoming Pub/Sub events and RPC invocations.
+        self.task_tracker.stop_all_except_message_listener();
 
         let task_tracker = self.task_tracker.clone();
         let state = self.state.clone();
@@ -357,7 +379,7 @@ impl<T: Transport> Client<T> {
         // Stop listening for incoming ABORT and GOODBYE messages and begin
         // closing the transport.
         task_tracker.stop_proto_msg_listener().await;
-        task_tracker.get_sender().await.close().await?;
+        task_tracker.lock_sender().await.close().await?;
 
         state.write(ClientState::TransportClosed);
         Ok(())
@@ -388,7 +410,7 @@ impl<T: Transport> Drop for Client<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 struct RouterCapabilities {
     broker: bool,
     dealer: bool,

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use failure::Error;
@@ -9,7 +10,7 @@ use futures::{
 use tokio::prelude::*;
 
 use crate::{
-    client::{watch_for_client_state_change, Client, ClientState, ClientTaskTracker},
+    client::{watch_for_client_state_change, Client, ClientTaskTracker},
     proto::TxMessage,
     transport::Transport,
     Broadcast, Id, SessionScope, Uri,
@@ -21,9 +22,9 @@ async fn publish_impl<T: Transport>(
     message: Broadcast,
 ) -> Result<(), Error> {
     {
-        let sender = task_tracker.get_sender().await;
-        poll_fn(|cx| sender.poll_ready(cx)).await?;
-        sender.start_send(TxMessage::Publish {
+        let sender = task_tracker.lock_sender().await;
+        poll_fn(|cx| Pin::new(&mut sender).poll_ready(cx)).await?;
+        Pin::new(&mut sender).start_send(TxMessage::Publish {
             request: Id::<SessionScope>::next(),
             options: HashMap::new(),
             topic,
@@ -33,8 +34,8 @@ async fn publish_impl<T: Transport>(
     }
 
     {
-        let mut sender = task_tracker.get_sender().await;
-        poll_fn(|cx| sender.poll_flush(cx)).await?;
+        let mut sender = task_tracker.lock_sender().await;
+        poll_fn(|cx| Pin::new(&mut sender).poll_flush(cx)).await?;
     }
 
     Ok(())
@@ -45,10 +46,8 @@ pub(in crate::client) async fn publish<T: Transport>(
     topic: Uri,
     message: Broadcast,
 ) -> Result<(), Error> {
-    let wfcsc = watch_for_client_state_change(client.state.clone(), |state| {
-        state == ClientState::Established
-    })
-    .fuse();
+    let wfcsc =
+        watch_for_client_state_change(client.state.clone(), |state| state.is_established()).fuse();
     let pi = publish_impl(client.task_tracker.clone(), topic, message).fuse();
 
     pin_mut!(wfcsc, pi);

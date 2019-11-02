@@ -12,7 +12,7 @@ use tokio::prelude::*;
 use tokio::sync::oneshot;
 
 use crate::{
-    client::{watch_for_client_state_change, Broadcast, Client, ClientState, ClientTaskTracker},
+    client::{watch_for_client_state_change, Broadcast, Client, ClientTaskTracker},
     proto::TxMessage,
     transport::Transport,
     Id, MessageBuffer, RouterScope, SessionScope, SubscriptionStream, Uri,
@@ -26,9 +26,9 @@ async fn subscribe_impl<T: Transport>(
     let request_id = Id::<SessionScope>::next();
 
     {
-        let sender = task_tracker.get_sender().await;
-        poll_fn(|cx| sender.poll_ready(cx)).await?;
-        sender.start_send(TxMessage::Subscribe {
+        let sender = task_tracker.lock_sender().await;
+        poll_fn(|cx| Pin::new(&mut sender).poll_ready(cx)).await?;
+        Pin::new(&mut sender).start_send(TxMessage::Subscribe {
             topic: topic.clone(),
             request: request_id,
             options: HashMap::default(),
@@ -36,8 +36,8 @@ async fn subscribe_impl<T: Transport>(
     }
 
     {
-        let sender = task_tracker.get_sender().await;
-        poll_fn(|cx| sender.poll_flush(cx)).await?;
+        let sender = task_tracker.lock_sender().await;
+        poll_fn(|cx| Pin::new(&mut sender).poll_flush(cx)).await?;
     }
 
     // Wait for a SUBSCRIBED message.
@@ -67,10 +67,8 @@ pub(in crate::client) async fn subscribe<T: Transport>(
     client: &Client<T>,
     topic: Uri,
 ) -> Result<impl SubscriptionStream, Error> {
-    let wfcsc = watch_for_client_state_change(client.state.clone(), |state| {
-        state == ClientState::Established
-    })
-    .fuse();
+    let wfcsc =
+        watch_for_client_state_change(client.state.clone(), |state| state.is_established()).fuse();
     let si = subscribe_impl(client.task_tracker.clone(), topic, client.received.clone()).fuse();
 
     pin_mut!(wfcsc, si);
