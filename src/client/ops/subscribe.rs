@@ -111,8 +111,6 @@ impl Stream for SubscriptionStreamImpl {
             }
         }
 
-        // TODO: have a different event queue for each subscription so we don't need
-        // to pass a lambda here.
         match self
             .values
             .event

@@ -30,8 +30,6 @@ fn integration_1() {
     client_config.shutdown_timeout = Duration::from_secs(60 * 10);
     client_config.user_agent = Some("WampProto Test".into());
 
-    // TODO: listen for broken conenctions before InitializeFuture finishes
-
     let future = Client::<WebsocketTransport>::new(client_config)
         .and_then(|mut client| {
             let future =
