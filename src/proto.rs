@@ -4,7 +4,7 @@ use crate::{transport::TransportableValue, GlobalScope, Id, RouterScope, Session
 
 /// Raw message codes for each message type.
 #[allow(missing_docs)]
-mod msg_code {
+pub(in crate) mod msg_code {
     pub const HELLO: u64 = 1;
     pub const WELCOME: u64 = 2;
     pub const ABORT: u64 = 3;

@@ -116,6 +116,11 @@ impl<T> PollableSet<T> {
         }
     }
 
+    /// See `poll_take` (but this will assume the predicate always passes).
+    pub fn poll_take_any(&self, cx: &mut Context) -> Poll<T> {
+        self.poll_take(cx, |_| true)
+    }
+
     /// Synchronously removes all items matching the given predicate.
     pub fn drain<F: FnMut(&T) -> bool>(&self, mut predicate: F) {
         let mut items = self.items.write();

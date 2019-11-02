@@ -13,7 +13,7 @@ use crate::{
     client::{ClientState, ClientTaskTracker, RouterCapabilities},
     known_uri,
     pollable::PollableValue,
-    proto::{is_valid_msg_code, rx::RxMessage, TxMessage},
+    proto::{msg_code, rx::RxMessage, TxMessage},
     transport::Transport,
     GlobalScope, Id, MessageBuffer, Uri,
 };
@@ -157,16 +157,12 @@ async fn message_listener_impl<T: Transport>(
 enum ProcessMessageResult {
     // Processed a normal message; continue as usual.
     Continue,
-    // Processed a WELCOME message, whcich requires special handling.
     Welcome {
         session_id: Id<GlobalScope>,
         router_capabilities: RouterCapabilities,
     },
-    // Processed an ABORT message, which requires special handling.
     Abort,
-    // Processed a GOODBYE message, which requires special handling.
     Goodbye,
-    // The peer committed a protocol error, which requires special handling.
     ProtocolError,
 }
 
@@ -215,13 +211,53 @@ fn process_message(
 
         RxMessage::Error(error) => {
             if client_state.is_established() {
-                if is_valid_msg_code(error.request_type) {
-                    trace!("Received ERROR: {:?}", error);
-                    received.error.insert(error);
-                    ProcessMessageResult::Continue
-                } else {
-                    warn!("Received ERROR with invalid request type: {:?}", error);
-                    ProcessMessageResult::ProtocolError
+                match error.request_type {
+                    #[cfg(feature = "subscriber")]
+                    msg_code::SUBSCRIBE => {
+                        trace!("Received SUBSCRIBE ERROR: {:?}", error);
+                        received.errors.subscribe.insert(error);
+                        ProcessMessageResult::Continue
+                    }
+
+                    #[cfg(feature = "subscriber")]
+                    msg_code::UNSUBSCRIBE => {
+                        trace!("Received UNSUBSCRIBE ERROR: {:?}", error);
+                        received.errors.unsubscribe.insert(error);
+                        ProcessMessageResult::Continue
+                    }
+
+                    #[cfg(feature = "publisher")]
+                    msg_code::PUBLISH => {
+                        trace!("Received PUBLISH ERROR: {:?}", error);
+                        received.errors.publish.insert(error);
+                        ProcessMessageResult::Continue
+                    }
+
+                    #[cfg(feature = "callee")]
+                    msg_code::REGISTER => {
+                        trace!("Received REGISTER ERROR: {:?}", error);
+                        received.errors.register.insert(error);
+                        ProcessMessageResult::Continue
+                    }
+
+                    #[cfg(feature = "callee")]
+                    msg_code::UNREGISTER => {
+                        trace!("Received UNREGISTER ERROR: {:?}", error);
+                        received.errors.unregister.insert(error);
+                        ProcessMessageResult::Continue
+                    }
+
+                    #[cfg(feature = "caller")]
+                    msg_code::CALL => {
+                        trace!("Received CALL ERROR: {:?}", error);
+                        received.errors.call.insert(error);
+                        ProcessMessageResult::Continue
+                    }
+
+                    _ => {
+                        warn!("Received ERROR with invalid request type: {:?}", error);
+                        ProcessMessageResult::ProtocolError
+                    }
                 }
             } else {
                 warn!("Received ERROR with no active session: {:?}", error);

@@ -36,7 +36,7 @@ async fn close_impl<T: Transport>(
     }
 
     // Wait for a goodbye message to come in, confirming the disconnect.
-    poll_fn(|cx| received.goodbye.poll_take(cx, |_| true)).await;
+    poll_fn(|cx| received.goodbye.poll_take_any(cx)).await;
 
     Ok(())
 }
