@@ -1,7 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use failure::Error;
 use futures::{
     future::{poll_fn, select},
     pin_mut,
@@ -10,6 +9,7 @@ use tokio::prelude::*;
 
 use crate::{
     client::{watch_for_client_state_change, Client, ClientTaskTracker},
+    error::WampError,
     proto::TxMessage,
     transport::Transport,
     Id, MessageBuffer, SessionScope, SubscriptionStream,
@@ -19,21 +19,36 @@ async fn unsubscribe_impl<T: Transport>(
     task_tracker: Arc<ClientTaskTracker<T>>,
     subscription: impl SubscriptionStream,
     received: Arc<MessageBuffer>,
-) -> Result<(), Error> {
+) -> Result<(), WampError> {
     let request_id = Id::<SessionScope>::next();
 
     {
         let sender = task_tracker.lock_sender().await;
-        poll_fn(|cx| Pin::new(&mut sender).poll_ready(cx)).await?;
-        Pin::new(&mut sender).start_send(TxMessage::Unsubscribe {
-            request: request_id,
-            subscription: subscription.get_subscription_id(),
-        })?;
+        poll_fn(|cx| Pin::new(&mut sender).poll_ready(cx))
+            .await
+            .map_err(|error| WampError::WaitForReadyToSendFailed {
+                message_type: "UNSUBSCRIBE",
+                error,
+            })?;
+        Pin::new(&mut sender)
+            .start_send(TxMessage::Unsubscribe {
+                request: request_id,
+                subscription: subscription.get_subscription_id(),
+            })
+            .map_err(|error| WampError::MessageSendFailed {
+                message_type: "UNSUBSCRIBE",
+                error,
+            })?;
     }
 
     {
         let sender = task_tracker.lock_sender().await;
-        poll_fn(|cx| Pin::new(&mut sender).poll_flush(cx)).await?;
+        poll_fn(|cx| Pin::new(&mut sender).poll_flush(cx))
+            .await
+            .map_err(|error| WampError::SinkFlushFailed {
+                message_type: "UNSUBSCRIBE",
+                error,
+            })?;
     }
 
     // Wait for an UNSUBSCRIBED message to come in, confirming the unsubscription.
@@ -59,7 +74,7 @@ async fn unsubscribe_impl<T: Transport>(
 pub(in crate::client) async fn unsubscribe<T: Transport, S: SubscriptionStream>(
     client: &Client<T>,
     subscription: S,
-) -> Result<(), Error> {
+) -> Result<(), WampError> {
     let wfcsc =
         watch_for_client_state_change(client.state.clone(), |state| state.is_established()).fuse();
     let ui = unsubscribe_impl(

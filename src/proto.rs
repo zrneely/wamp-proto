@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::{transport::TransportableValue, GlobalScope, Id, RouterScope, SessionScope, Uri};
 
@@ -44,55 +44,6 @@ pub(in crate) mod msg_code {
     pub const INVOCATION: u64 = 68;
     #[cfg(feature = "callee")]
     pub const YIELD: u64 = 70;
-}
-
-/// Determines if the specified integer is a valid message code.
-pub fn is_valid_msg_code(code: u64) -> bool {
-    lazy_static! {
-        static ref VALID_CODES: HashSet<u64> = {
-            let mut valid_codes = HashSet::with_capacity(19);
-
-            valid_codes.insert(msg_code::HELLO);
-            valid_codes.insert(msg_code::WELCOME);
-            valid_codes.insert(msg_code::ABORT);
-            valid_codes.insert(msg_code::ERROR);
-
-            #[cfg(feature = "publisher")]
-            {
-                valid_codes.insert(msg_code::PUBLISH);
-                valid_codes.insert(msg_code::PUBLISHED);
-            }
-
-            #[cfg(feature = "subscriber")]
-            {
-                valid_codes.insert(msg_code::SUBSCRIBE);
-                valid_codes.insert(msg_code::SUBSCRIBED);
-                valid_codes.insert(msg_code::UNSUBSCRIBE);
-                valid_codes.insert(msg_code::UNSUBSCRIBED);
-                valid_codes.insert(msg_code::EVENT);
-            }
-
-            #[cfg(feature = "caller")]
-            {
-                valid_codes.insert(msg_code::CALL);
-                valid_codes.insert(msg_code::RESULT);
-            }
-
-            #[cfg(feature = "callee")]
-            {
-                valid_codes.insert(msg_code::REGISTER);
-                valid_codes.insert(msg_code::REGISTERED);
-                valid_codes.insert(msg_code::UNREGISTER);
-                valid_codes.insert(msg_code::UNREGISTERED);
-                valid_codes.insert(msg_code::INVOCATION);
-                valid_codes.insert(msg_code::YIELD);
-            }
-
-            valid_codes
-        };
-    }
-
-    VALID_CODES.contains(&code)
 }
 
 type Dict = HashMap<String, TransportableValue>;
@@ -398,7 +349,6 @@ impl TxMessage {
 ///
 /// [the WAMP protocol specification]: http://wamp-proto.org/spec/
 #[allow(missing_docs)]
-// TODO: convert to enum
 pub mod rx {
     use super::*;
 

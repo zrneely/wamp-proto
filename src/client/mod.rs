@@ -62,6 +62,19 @@ impl ClientState {
             _ => false,
         }
     }
+
+    pub fn get_name(&self) -> &'static str {
+        match self {
+            ClientState::Closed => "CLOSED",
+            ClientState::Establishing => "ESTABLISHING",
+            ClientState::Failed => "FAILED",
+            ClientState::Authenticating => "AUTHENTICATING",
+            ClientState::Established { .. } => "ESTABLISHED",
+            ClientState::ShuttingDown => "SHUTTING_DOWN",
+            ClientState::Closing => "CLOSING",
+            ClientState::TransportClosed => "TRANSPORT_CLOSED",
+        }
+    }
 }
 
 /// If the client state ever changes to a value that fails the predicate, this
@@ -69,7 +82,7 @@ impl ClientState {
 async fn watch_for_client_state_change<F, T>(
     state: PollableValue<ClientState>,
     is_ok: F,
-) -> Result<T, Error>
+) -> Result<T, WampError>
 where
     F: FnMut(ClientState) -> bool,
 {
@@ -79,17 +92,14 @@ where
             Poll::Pending
         } else {
             error!("unexpected client state: {:?}", state);
-            Poll::Ready(Err(WampError::InvalidClientState.into()))
+            Poll::Ready(Err(WampError::ClientStateChanged(state.get_name())))
         }
     })
     .await
 }
 
 type StopSender = oneshot::Sender<()>;
-// Tracks all of the tasks owned by a client. This is Send + Sync because StopSender is
-// Send + Sync. Mutex<T> is Send + Sync as long as T is Send, HashMap<K, V> is Send as long
-// as K and V are both Send.
-// TODO: rename to ClientResourceHandle or something
+// Tracks all of the tasks owned by a client.
 struct ClientTaskTracker<T: Transport> {
     sender: Mutex<T::Sink>,
 
@@ -225,7 +235,7 @@ impl<T: Transport> Client<T> {
     ///
     /// This method will handle initialization of the [`Transport`] used, but the caller must
     /// specify the type of transport.
-    pub async fn new(config: ClientConfig<'_>) -> Result<Self, Error> {
+    pub async fn new(config: ClientConfig<'_>) -> Result<Self, WampError> {
         let ClientConfig {
             url,
             realm,
@@ -234,7 +244,9 @@ impl<T: Transport> Client<T> {
             panic_on_drop_while_open,
             user_agent,
         } = config;
-        let (sink, stream) = T::connect(url).await?;
+        let (sink, stream) = T::connect(url)
+            .await
+            .map_err(|err| WampError::ConnectFailed(err))?;
 
         ops::initialize::initialize(sink, stream, realm, panic_on_drop_while_open, user_agent).await
     }
@@ -267,7 +279,7 @@ impl<T: Transport> Client<T> {
     /// Publishes a message. The returned future will complete as soon as the protocol-level work
     /// of sending the message is complete.
     #[cfg(feature = "publisher")]
-    pub async fn publish(&mut self, topic: Uri, broadcast: Broadcast) -> Result<(), Error> {
+    pub async fn publish(&mut self, topic: Uri, broadcast: Broadcast) -> Result<(), WampError> {
         match self.state.read(None) {
             ClientState::Established {
                 router_capabilities,
@@ -276,12 +288,12 @@ impl<T: Transport> Client<T> {
                 if router_capabilities.broker {
                     ops::publish::publish(self, topic, broadcast).await
                 } else {
-                    Err(WampError::RouterSupportMissing.into())
+                    Err(WampError::RouterSupportMissing("broker"))
                 }
             }
             state => {
                 warn!("Tried to publish when client state was {:?}", state);
-                Err(WampError::InvalidClientState.into())
+                Err(WampError::InvalidClientState)
             }
         }
     }
@@ -319,7 +331,7 @@ impl<T: Transport> Client<T> {
     /// * If the router does not acknowledge the subscription within the client timeout period, the returned
     /// future will resolve with an error.
     #[cfg(feature = "subscriber")]
-    pub async fn subscribe(&mut self, topic: Uri) -> Result<impl SubscriptionStream, Error> {
+    pub async fn subscribe(&mut self, topic: Uri) -> Result<impl SubscriptionStream, WampError> {
         match self.state.read(None) {
             ClientState::Established {
                 router_capabilities,
@@ -328,12 +340,12 @@ impl<T: Transport> Client<T> {
                 if router_capabilities.broker {
                     ops::subscribe::subscribe(self, topic).await
                 } else {
-                    Err(WampError::RouterSupportMissing.into())
+                    Err(WampError::RouterSupportMissing("broker"))
                 }
             }
             state => {
                 warn!("Tried to subscribe when client state was {:?}", state);
-                Err(WampError::InvalidClientState.into())
+                Err(WampError::InvalidClientState)
             }
         }
     }
@@ -342,7 +354,7 @@ impl<T: Transport> Client<T> {
     pub async fn unsubscribe<S: SubscriptionStream>(
         &mut self,
         subscription: S,
-    ) -> Result<(), Error> {
+    ) -> Result<(), WampError> {
         match self.state.read(None) {
             ClientState::Established {
                 router_capabilities,
@@ -351,12 +363,12 @@ impl<T: Transport> Client<T> {
                 if router_capabilities.broker {
                     ops::unsubscribe::unsubscribe(self, subscription).await
                 } else {
-                    Err(WampError::RouterSupportMissing.into())
+                    Err(WampError::RouterSupportMissing("broker"))
                 }
             }
             state => {
                 warn!("Tried to unsubscribe when client state was {:?}", state);
-                Err(WampError::InvalidClientState.into())
+                Err(WampError::InvalidClientState)
             }
         }
     }

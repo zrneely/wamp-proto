@@ -3,16 +3,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use failure::Error;
 use futures::{
     future::{poll_fn, select, FutureExt},
-    pin_mut,
+    pin_mut, select,
 };
 use tokio::prelude::*;
 use tokio::sync::oneshot;
 
 use crate::{
     client::{watch_for_client_state_change, Broadcast, Client, ClientTaskTracker},
+    error::WampError,
     pollable::PollableSet,
     proto::TxMessage,
     transport::Transport,
@@ -23,56 +23,90 @@ async fn subscribe_impl<T: Transport>(
     task_tracker: Arc<ClientTaskTracker<T>>,
     topic: Uri,
     received: Arc<MessageBuffer>,
-) -> Result<impl SubscriptionStream, Error> {
+) -> Result<impl SubscriptionStream, WampError> {
     let request_id = Id::<SessionScope>::next();
 
     {
         let sender = task_tracker.lock_sender().await;
-        poll_fn(|cx| Pin::new(&mut sender).poll_ready(cx)).await?;
-        Pin::new(&mut sender).start_send(TxMessage::Subscribe {
-            topic: topic.clone(),
-            request: request_id,
-            options: HashMap::default(),
-        })?;
+        poll_fn(|cx| Pin::new(&mut sender).poll_ready(cx))
+            .await
+            .map_err(|error| WampError::WaitForReadyToSendFailed {
+                message_type: "SUBSCRIBE",
+                error,
+            })?;
+        Pin::new(&mut sender)
+            .start_send(TxMessage::Subscribe {
+                topic: topic.clone(),
+                request: request_id,
+                options: HashMap::default(),
+            })
+            .map_err(|error| WampError::MessageSendFailed {
+                message_type: "SUBSCRIBE",
+                error,
+            })?;
     }
 
     {
         let sender = task_tracker.lock_sender().await;
-        poll_fn(|cx| Pin::new(&mut sender).poll_flush(cx)).await?;
+        poll_fn(|cx| Pin::new(&mut sender).poll_flush(cx))
+            .await
+            .map_err(|error| WampError::SinkFlushFailed {
+                message_type: "SUBSCRIBE",
+                error,
+            })?;
     }
 
-    // Wait for a SUBSCRIBED message.
-    let msg = poll_fn(|cx| {
+    // Wait for a SUBSCRIBED or ERROR message.
+    let subscribed_msg = poll_fn(|cx| {
         received
             .subscribed
             .poll_take(cx, |msg| msg.request == request_id)
     })
-    .await;
+    .fuse();
+    let error_msg = poll_fn(|cx| {
+        received
+            .errors
+            .subscribe
+            .poll_take(cx, |msg| msg.request == request_id)
+    })
+    .fuse();
 
-    info!("Subscribed to {:?} (ID: {:?})", topic, msg.subscription);
-    let (sender, receiver) = oneshot::channel();
+    pin_mut!(subscribed_msg, error_msg);
+    select! {
+        msg = subscribed_msg => {
+            info!("Subscribed to {:?} (ID: {:?})", topic, msg.subscription);
+            let (sender, receiver) = oneshot::channel();
 
-    let subscription_stream = SubscriptionStreamImpl {
-        values: received.clone(),
-        stop_receiver: receiver,
-        subscription_id: msg.subscription,
-    };
+            let subscription_stream = SubscriptionStreamImpl {
+                values: received.clone(),
+                stop_receiver: receiver,
+                subscription_id: msg.subscription,
+            };
 
-    // Create an EVENT queue for our subscription, and allow
-    // the client to stop the stream.
-    received
-        .event
-        .write()
-        .insert(msg.subscription, PollableSet::default());
-    task_tracker.track_subscription(msg.subscription, sender);
+            // Create an EVENT queue for our subscription, and allow
+            // the client to stop the stream.
+            received
+                .event
+                .write()
+                .insert(msg.subscription, PollableSet::default());
+            task_tracker.track_subscription(msg.subscription, sender);
 
-    Ok(subscription_stream)
+            Ok(subscription_stream)
+        }
+        msg = error_msg => {
+            Err(WampError::ErrorReceived {
+                error: msg.error,
+                request_type: msg.request_type,
+                request_id: msg.request,
+            })
+        }
+    }
 }
 
 pub(in crate::client) async fn subscribe<T: Transport>(
     client: &Client<T>,
     topic: Uri,
-) -> Result<impl SubscriptionStream, Error> {
+) -> Result<impl SubscriptionStream, WampError> {
     let wfcsc =
         watch_for_client_state_change(client.state.clone(), |state| state.is_established()).fuse();
     let si = subscribe_impl(client.task_tracker.clone(), topic, client.received.clone()).fuse();

@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::task::Poll;
 
-use failure::Error;
 use futures::{future::poll_fn, sink::SinkExt};
 use tokio::prelude::*;
 use tokio::sync::oneshot;
 
 use crate::{
     client::{Client, ClientState, ClientTaskTracker, MessageBuffer, Transport},
+    error::WampError,
     pollable::PollableValue,
     proto::TxMessage,
     transport::TransportableValue as TV,
@@ -21,7 +21,7 @@ pub(in crate::client) async fn initialize<T: 'static + Transport>(
     realm: Uri,
     panic_on_drop_while_open: bool,
     user_agent: Option<String>,
-) -> Result<Client<T>, Error> {
+) -> Result<Client<T>, WampError> {
     let received = Arc::new(MessageBuffer::default());
     let (stop_sender, stop_receiver) = oneshot::channel();
     let task_tracker = ClientTaskTracker::new(sink, stop_sender);
@@ -65,7 +65,11 @@ pub(in crate::client) async fn initialize<T: 'static + Transport>(
             details
         },
     })
-    .await?;
+    .await
+    .map_err(|error| WampError::MessageSendFailed {
+        message_type: "HELLO",
+        error,
+    })?;
 
     // Wait for the message listener to set the client state to "Established".
     let session_id = poll_fn(|cx| {
