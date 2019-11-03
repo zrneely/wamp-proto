@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use futures::{
     future::{poll_fn, select},
-    pin_mut,
+    pin_mut, select,
 };
 use tokio::prelude::*;
 
@@ -54,21 +54,40 @@ async fn unsubscribe_impl<T: Transport>(
     // Wait for an UNSUBSCRIBED message to come in, confirming the unsubscription.
     // After this await, there should be no new EVENTs, so it's safe to clean up
     // the EVENT queue.
-    poll_fn(|cx| {
+    let unsubscribed_msg = poll_fn(|cx| {
         received
             .unsubscribed
             .poll_take(cx, |msg| msg.request == request_id)
     })
-    .await;
+    .fuse();
+    let error_msg = poll_fn(|cx| {
+        received
+            .errors
+            .unsubscribe
+            .poll_take(cx, |msg| msg.request == request_id)
+    })
+    .fuse();
 
-    // Clean up the event queue and SubscriptionStream.
-    received
-        .event
-        .write()
-        .remove(&subscription.get_subscription_id());
-    task_tracker.stop_subscription(subscription.get_subscription_id());
+    pin_mut!(unsubscribed_msg, error_msg);
+    select! {
+        msg = unsubscribed_msg => {
+            // Clean up the event queue and SubscriptionStream.
+            received
+                .event
+                .write()
+                .remove(&subscription.get_subscription_id());
+            task_tracker.stop_subscription(subscription.get_subscription_id());
 
-    Ok(())
+            Ok(())
+        }
+        msg = error_msg => {
+            Err(WampError::ErrorReceived {
+                error: msg.error,
+                request_type: msg.request_type,
+                request_id: msg.request,
+            })
+        }
+    }
 }
 
 pub(in crate::client) async fn unsubscribe<T: Transport, S: SubscriptionStream>(

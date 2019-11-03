@@ -278,6 +278,9 @@ impl<T: Transport> Client<T> {
 
     /// Publishes a message. The returned future will complete as soon as the protocol-level work
     /// of sending the message is complete.
+    ///
+    /// Note that in particular, if publishing the message fails because the broker elects to
+    /// refuse it, that failure will not be reflected in the [`Result`] this returns.
     #[cfg(feature = "publisher")]
     pub async fn publish(&mut self, topic: Uri, broadcast: Broadcast) -> Result<(), WampError> {
         match self.state.read(None) {

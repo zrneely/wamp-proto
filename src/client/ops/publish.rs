@@ -53,6 +53,9 @@ async fn publish_impl<T: Transport>(
             })?;
     }
 
+    // Note: since we're not requesting acknowledgement, the broker
+    // will not tell us if the message request fails.
+
     Ok(())
 }
 
