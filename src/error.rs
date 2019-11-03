@@ -1,6 +1,6 @@
 use failure::Error;
 
-use crate::{Id, SessionScope, Uri};
+use crate::{uri::Uri, Id, SessionScope};
 
 /// An error produced by the WAMP crate directly.
 #[derive(Debug, Fail)]

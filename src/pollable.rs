@@ -29,7 +29,7 @@ where
     /// Copies the value. If task context is provided, registers the task's interest in future
     /// values of the variable.
     pub fn read(&self, cx: Option<&mut Context>) -> T {
-        if let Some(ref mut cx) = cx {
+        if let Some(cx) = cx {
             // We clone the waker instead of storing a ref and using wake_by_ref because
             // the actual waking operation happens in another method, and we have no way
             // to tie the lifetime of the current context to the time that method is called.
@@ -99,7 +99,7 @@ impl<T> PollableSet<T> {
     where
         F: FnMut(&T) -> bool,
     {
-        let items = self.items.write();
+        let mut items = self.items.write();
         match items.iter().enumerate().find(|&(_, t)| predicate(t)) {
             Some((idx, _)) => {
                 let value = items.remove(idx);
@@ -107,7 +107,7 @@ impl<T> PollableSet<T> {
             }
             None => {
                 let new_waker = cx.waker();
-                let wakers = self.wakers.lock();
+                let mut wakers = self.wakers.lock();
                 if !wakers.iter().any(|w| w.will_wake(new_waker)) {
                     wakers.push(new_waker.clone());
                 }
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn pollable_set_test() {
-        let runtime = tokio::runtime::current_thread::Runtime::new().unwrap();
+        let mut runtime = tokio::runtime::current_thread::Runtime::new().unwrap();
 
         let set = PollableSet::<u32>::new();
         assert_eq!(0, set.items.read().len());

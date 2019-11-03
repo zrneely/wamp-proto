@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{transport::TransportableValue, GlobalScope, Id, RouterScope, SessionScope, Uri};
+use crate::{transport::TransportableValue, uri::Uri, GlobalScope, Id, RouterScope, SessionScope};
 
 /// Raw message codes for each message type.
 #[allow(missing_docs)]
@@ -190,6 +190,7 @@ impl TxMessage {
             Hello { .. } => msg_code::HELLO,
             Goodbye { .. } => msg_code::GOODBYE,
             Error { .. } => msg_code::ERROR,
+            Abort { .. } => msg_code::ABORT,
 
             #[cfg(feature = "publisher")]
             Publish { .. } => msg_code::PUBLISH,
@@ -226,6 +227,11 @@ impl TxMessage {
                 ref realm,
                 ref details,
             } => json!([code, realm, details]),
+
+            Abort {
+                ref details,
+                ref reason,
+            } => json!([code, details, reason]),
 
             Goodbye {
                 ref details,

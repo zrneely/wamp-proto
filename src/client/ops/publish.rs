@@ -9,11 +9,12 @@ use futures::{
 use tokio::prelude::*;
 
 use crate::{
-    client::{watch_for_client_state_change, Client, ClientTaskTracker},
+    client::{watch_for_client_state_change, Broadcast, Client, ClientTaskTracker},
     error::WampError,
     proto::TxMessage,
     transport::Transport,
-    Broadcast, Id, SessionScope, Uri,
+    uri::Uri,
+    Id, SessionScope,
 };
 
 async fn publish_impl<T: Transport>(
@@ -22,14 +23,14 @@ async fn publish_impl<T: Transport>(
     message: Broadcast,
 ) -> Result<(), WampError> {
     {
-        let sender = task_tracker.lock_sender().await;
-        poll_fn(|cx| Pin::new(&mut sender).poll_ready(cx))
+        let mut sender = task_tracker.get_sender().lock().await;
+        poll_fn(|cx| Pin::new(&mut *sender).poll_ready(cx))
             .await
             .map_err(|error| WampError::WaitForReadyToSendFailed {
                 message_type: "PUBLISH",
                 error,
             })?;
-        Pin::new(&mut sender)
+        Pin::new(&mut *sender)
             .start_send(TxMessage::Publish {
                 request: Id::<SessionScope>::next(),
                 options: HashMap::new(),
@@ -44,8 +45,8 @@ async fn publish_impl<T: Transport>(
     }
 
     {
-        let mut sender = task_tracker.lock_sender().await;
-        poll_fn(|cx| Pin::new(&mut sender).poll_flush(cx))
+        let mut sender = task_tracker.get_sender().lock().await;
+        poll_fn(|cx| Pin::new(&mut *sender).poll_flush(cx))
             .await
             .map_err(|error| WampError::SinkFlushFailed {
                 message_type: "PUBLISH",

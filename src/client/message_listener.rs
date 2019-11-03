@@ -1,21 +1,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use futures::{
-    future::{poll_fn, FutureExt},
-    pin_mut, select,
-    stream::StreamExt,
-};
+use futures::{future::poll_fn, pin_mut, select};
 use tokio::prelude::*;
 use tokio::sync::oneshot;
 
 use crate::{
     client::{ClientState, ClientTaskTracker, RouterCapabilities},
-    known_uri,
     pollable::PollableValue,
     proto::{msg_code, rx::RxMessage, TxMessage},
     transport::Transport,
-    GlobalScope, Id, MessageBuffer, Uri,
+    uri::{known_uri, Uri},
+    GlobalScope, Id, MessageBuffer,
 };
 
 /// This is a long-running task (only finishes when the client is closed)
@@ -24,12 +20,12 @@ use crate::{
 ///
 /// Because WAMP messages can be received in any order and different peer/peer
 /// interactions can interleave themselves, a message buffer is needed.
-pub async fn message_listener<T: Transport>(
+pub(in crate::client) async fn message_listener<T: Transport>(
     task_tracker: Arc<ClientTaskTracker<T>>,
     stream: T::Stream,
     received: Arc<MessageBuffer>,
     client_state: PollableValue<ClientState>,
-    stop_receiver: oneshot::Receiver<()>,
+    mut stop_receiver: oneshot::Receiver<()>,
 ) {
     let stop_listener = poll_fn(|cx| stop_receiver.poll_unpin(cx)).fuse();
     let message_listener =
@@ -47,9 +43,12 @@ pub async fn message_listener<T: Transport>(
     }
 }
 
+// Each isolated chunk is relatively simple, and it would be a hassle to pass all
+// the arguments on the stack to helper functions.
+#[allow(clippy::cognitive_complexity)]
 async fn message_listener_impl<T: Transport>(
     task_tracker: Arc<ClientTaskTracker<T>>,
-    stream: T::Stream,
+    mut stream: T::Stream,
     received: Arc<MessageBuffer>,
     client_state: PollableValue<ClientState>,
 ) {
@@ -77,7 +76,7 @@ async fn message_listener_impl<T: Transport>(
                         // stop all tasks, close the transport, set the state to TransportClosed, and finish.
                         client_state.write(ClientState::Closed);
                         task_tracker.stop_all_except_message_listener();
-                        if let Err(error) = task_tracker.lock_sender().await.close().await {
+                        if let Err(error) = task_tracker.get_sender().lock().await.close().await {
                             error!("Failed to close sender when handling ABORT: {}", error);
                         }
                         client_state.write(ClientState::TransportClosed);
@@ -90,7 +89,8 @@ async fn message_listener_impl<T: Transport>(
                         client_state.write(ClientState::Failed);
                         if let Err(error) = {
                             task_tracker
-                                .lock_sender()
+                                .get_sender()
+                                .lock()
                                 .await
                                 .send(TxMessage::Abort {
                                     details: HashMap::default(),
@@ -102,7 +102,7 @@ async fn message_listener_impl<T: Transport>(
                         }
 
                         task_tracker.stop_all_except_message_listener();
-                        if let Err(error) = task_tracker.lock_sender().await.close().await {
+                        if let Err(error) = task_tracker.get_sender().lock().await.close().await {
                             error!(
                                 "Failed to close sender in response to protocol violation: {}",
                                 error
@@ -124,7 +124,8 @@ async fn message_listener_impl<T: Transport>(
                         client_state.write(ClientState::Closing);
                         if let Err(error) = {
                             task_tracker
-                                .lock_sender()
+                                .get_sender()
+                                .lock()
                                 .await
                                 .send(TxMessage::Goodbye {
                                     details: HashMap::default(),
@@ -137,7 +138,7 @@ async fn message_listener_impl<T: Transport>(
                             error!("Failed to respond to GOODBYE message: {}", error);
                         }
                         task_tracker.stop_all_except_message_listener();
-                        if let Err(error) = task_tracker.lock_sender().await.close().await {
+                        if let Err(error) = task_tracker.get_sender().lock().await.close().await {
                             error!("Failed to close sender when handling GOODBYE: {}", error);
                         }
                         client_state.write(ClientState::TransportClosed);
@@ -166,6 +167,8 @@ enum ProcessMessageResult {
     ProtocolError,
 }
 
+// Although there are lots of branches, most of them are very straightforward.
+#[allow(clippy::cognitive_complexity)]
 fn process_message(
     message: RxMessage,
     received: &MessageBuffer,

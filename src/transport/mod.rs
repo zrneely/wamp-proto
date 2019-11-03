@@ -10,7 +10,7 @@ use crate::{rx::RxMessage, TxMessage};
 
 /// A websocket-based transport.
 #[cfg(feature = "ws_transport")]
-pub mod websocket;
+pub mod websocket2;
 
 /// A transport capable of supporting a WAMP connection.
 ///
@@ -27,7 +27,12 @@ pub mod websocket;
 #[async_trait]
 pub trait Transport {
     // TODO: Do these have to be Unpin? Can they be?
+
+    /// The type of Sink produced by this Transport. This must be named since GATs are not yet
+    /// supported.
     type Sink: Sink<TxMessage, Error = Error> + Send + Unpin;
+    /// The type of Stream produced by this Transport. This must be named since GATs are not yet
+    /// supported.
     type Stream: Stream<Item = RxMessage> + Send + Unpin;
 
     /// Asynchronously constructs a transport to the router at the given location.
@@ -105,6 +110,7 @@ impl TransportableValue {
 }
 
 #[cfg(test)]
+#[allow(clippy::cognitive_complexity)]
 mod tests {
     use super::TransportableValue;
 

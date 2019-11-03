@@ -8,11 +8,11 @@ use futures::{
 use tokio::prelude::*;
 
 use crate::{
-    client::{watch_for_client_state_change, Client, ClientTaskTracker},
+    client::{watch_for_client_state_change, Client, ClientTaskTracker, SubscriptionStream},
     error::WampError,
     proto::TxMessage,
     transport::Transport,
-    Id, MessageBuffer, SessionScope, SubscriptionStream,
+    Id, MessageBuffer, SessionScope,
 };
 
 async fn unsubscribe_impl<T: Transport>(
@@ -23,14 +23,14 @@ async fn unsubscribe_impl<T: Transport>(
     let request_id = Id::<SessionScope>::next();
 
     {
-        let sender = task_tracker.lock_sender().await;
-        poll_fn(|cx| Pin::new(&mut sender).poll_ready(cx))
+        let mut sender = task_tracker.get_sender().lock().await;
+        poll_fn(|cx| Pin::new(&mut *sender).poll_ready(cx))
             .await
             .map_err(|error| WampError::WaitForReadyToSendFailed {
                 message_type: "UNSUBSCRIBE",
                 error,
             })?;
-        Pin::new(&mut sender)
+        Pin::new(&mut *sender)
             .start_send(TxMessage::Unsubscribe {
                 request: request_id,
                 subscription: subscription.get_subscription_id(),
@@ -42,8 +42,8 @@ async fn unsubscribe_impl<T: Transport>(
     }
 
     {
-        let sender = task_tracker.lock_sender().await;
-        poll_fn(|cx| Pin::new(&mut sender).poll_flush(cx))
+        let mut sender = task_tracker.get_sender().lock().await;
+        poll_fn(|cx| Pin::new(&mut *sender).poll_flush(cx))
             .await
             .map_err(|error| WampError::SinkFlushFailed {
                 message_type: "UNSUBSCRIBE",

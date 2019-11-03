@@ -5,13 +5,14 @@ use std::time::Duration;
 
 use failure::Error;
 use futures::{future::poll_fn, SinkExt};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::oneshot;
 
 use crate::{
     error::WampError,
     pollable::PollableValue,
     transport::{Transport, TransportableValue as TV},
-    GlobalScope, Id, MessageBuffer, RouterScope, Uri,
+    uri::Uri,
+    GlobalScope, Id, MessageBuffer, RouterScope,
 };
 
 mod message_listener;
@@ -81,7 +82,7 @@ impl ClientState {
 /// will complete with an error.
 async fn watch_for_client_state_change<F, T>(
     state: PollableValue<ClientState>,
-    is_ok: F,
+    mut is_ok: F,
 ) -> Result<T, WampError>
 where
     F: FnMut(ClientState) -> bool,
@@ -101,60 +102,60 @@ where
 type StopSender = oneshot::Sender<()>;
 // Tracks all of the tasks owned by a client.
 struct ClientTaskTracker<T: Transport> {
-    sender: Mutex<T::Sink>,
+    sender: tokio::sync::Mutex<T::Sink>,
 
     // Used to tell the message listener to stop when a locally-initiated shutdown occurs.
-    msg_listener_stop_sender: Mutex<Option<StopSender>>,
+    msg_listener_stop_sender: parking_lot::Mutex<Option<StopSender>>,
 
     #[cfg(feature = "subscriber")]
-    subscriptions: Mutex<HashMap<Id<RouterScope>, StopSender>>,
+    subscriptions: parking_lot::Mutex<HashMap<Id<RouterScope>, StopSender>>,
 }
 impl<T: Transport> ClientTaskTracker<T> {
     fn new(sender: T::Sink, proto_msg_stop_sender: StopSender) -> Arc<Self> {
         Arc::new(ClientTaskTracker {
-            sender: Mutex::new(sender),
-            msg_listener_stop_sender: Mutex::new(Some(proto_msg_stop_sender)),
+            sender: tokio::sync::Mutex::new(sender),
+            msg_listener_stop_sender: parking_lot::Mutex::new(Some(proto_msg_stop_sender)),
 
             #[cfg(feature = "subscriber")]
-            subscriptions: Mutex::new(HashMap::new()),
+            subscriptions: parking_lot::Mutex::new(HashMap::new()),
         })
     }
 
-    async fn lock_sender<'a>(&'a self) -> &'a mut T::Sink {
-        &mut *self.sender.lock().await
+    fn get_sender(&self) -> &tokio::sync::Mutex<T::Sink> {
+        &self.sender
     }
 
-    async fn stop_proto_msg_listener(&self) {
-        if let Some(sender) = self.msg_listener_stop_sender.lock().await.take() {
+    fn stop_message_listener(&self) {
+        if let Some(sender) = self.msg_listener_stop_sender.lock().take() {
             let _ = sender.send(());
         }
     }
 
     #[cfg(feature = "subscriber")]
-    async fn track_subscription(&self, id: Id<RouterScope>, sender: StopSender) {
-        let mut subs = self.subscriptions.lock().await;
+    fn track_subscription(&self, id: Id<RouterScope>, sender: StopSender) {
+        let mut subs = self.subscriptions.lock();
         subs.insert(id, sender);
     }
 
     #[cfg(feature = "subscriber")]
-    async fn stop_all_subscriptions(&self) {
-        let mut subs = self.subscriptions.lock().await;
-        for (_, mut sender) in subs.drain() {
+    fn stop_all_subscriptions(&self) {
+        let mut subs = self.subscriptions.lock();
+        for (_, sender) in subs.drain() {
             let _ = sender.send(());
         }
     }
 
     #[cfg(feature = "subscriber")]
-    async fn stop_subscription(&self, id: Id<RouterScope>) {
-        let mut subs = self.subscriptions.lock().await;
+    fn stop_subscription(&self, id: Id<RouterScope>) {
+        let mut subs = self.subscriptions.lock();
         if let Some(sender) = subs.remove(&id) {
             let _ = sender.send(());
         }
     }
 
-    async fn stop_all_except_message_listener(&self) {
+    fn stop_all_except_message_listener(&self) {
         #[cfg(feature = "subscriber")]
-        self.stop_all_subscriptions().await;
+        self.stop_all_subscriptions();
     }
 }
 
@@ -196,8 +197,10 @@ impl<'a> ClientConfig<'a> {
 }
 
 // TODO: move to subscribe.rs and re-export it here.
+/// An extension on top of a Stream that is used by subscriptions.
 #[cfg(feature = "subscriber")]
 pub trait SubscriptionStream: tokio::stream::Stream<Item = Broadcast> {
+    /// Returns the ID of this subscription.
     fn get_subscription_id(&self) -> Id<RouterScope>;
 }
 
@@ -219,14 +222,14 @@ pub struct Client<T: Transport> {
 }
 impl<T: Transport> std::fmt::Debug for Client<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "Client {{\n\treceived: {:?}\n\tsession_id: {:?}\n\trouter_capabilities: {:?}\n}}",
-            self.received, self.session_id, self.router_capabilities
-        )
+        f.debug_struct("Client")
+            .field("received", &self.received)
+            .field("state", &self.state)
+            .field("panic_on_drop_while_open", &self.panic_on_drop_while_open)
+            .finish()
     }
 }
-impl<T: Transport> Client<T> {
+impl<T: 'static + Transport> Client<T> {
     /// Begins initialization of a new [`Client`]. See [`ClientConfig`] for details.
     ///
     /// The client will attempt to connect to the WAMP router at the given URL and join the given
@@ -239,14 +242,11 @@ impl<T: Transport> Client<T> {
         let ClientConfig {
             url,
             realm,
-            timeout,
-            shutdown_timeout,
             panic_on_drop_while_open,
             user_agent,
+            ..
         } = config;
-        let (sink, stream) = T::connect(url)
-            .await
-            .map_err(|err| WampError::ConnectFailed(err))?;
+        let (sink, stream) = T::connect(url).await.map_err(WampError::ConnectFailed)?;
 
         ops::initialize::initialize(sink, stream, realm, panic_on_drop_while_open, user_agent).await
     }
@@ -353,6 +353,7 @@ impl<T: Transport> Client<T> {
         }
     }
 
+    /// Cancels an existing subscription.
     #[cfg(feature = "subscriber")]
     pub async fn unsubscribe<S: SubscriptionStream>(
         &mut self,
@@ -393,8 +394,8 @@ impl<T: Transport> Client<T> {
         // We've entered the Closed state now that CloseFuture is resolved.
         // Stop listening for incoming ABORT and GOODBYE messages and begin
         // closing the transport.
-        task_tracker.stop_proto_msg_listener().await;
-        task_tracker.lock_sender().await.close().await?;
+        task_tracker.stop_all_except_message_listener();
+        task_tracker.get_sender().lock().await.close().await?;
 
         state.write(ClientState::TransportClosed);
         Ok(())
@@ -408,8 +409,8 @@ impl<T: Transport> Client<T> {
 impl<T: Transport> Drop for Client<T> {
     fn drop(&mut self) {
         // Make a best-effort attempt to stop everything.
-        self.task_tracker.stop_all_except_proto_msg();
-        self.task_tracker.stop_proto_msg_listener();
+        self.task_tracker.stop_all_except_message_listener();
+        self.task_tracker.stop_message_listener();
 
         let state = self.state.read(None);
         if state != ClientState::TransportClosed {
@@ -425,7 +426,7 @@ impl<T: Transport> Drop for Client<T> {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct RouterCapabilities {
     broker: bool,
     dealer: bool,

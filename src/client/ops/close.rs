@@ -13,7 +13,8 @@ use crate::{
     error::WampError,
     proto::TxMessage,
     transport::Transport,
-    MessageBuffer, Uri,
+    uri::Uri,
+    MessageBuffer,
 };
 
 async fn close_impl<T: Transport>(
@@ -22,14 +23,14 @@ async fn close_impl<T: Transport>(
     received: Arc<MessageBuffer>,
 ) -> Result<(), WampError> {
     {
-        let sender = task_tracker.lock_sender().await;
-        poll_fn(|cx| Pin::new(&mut sender).poll_ready(cx))
+        let mut sender = task_tracker.get_sender().lock().await;
+        poll_fn(|cx| Pin::new(&mut *sender).poll_ready(cx))
             .await
             .map_err(|error| WampError::WaitForReadyToSendFailed {
                 message_type: "GOODBYE",
                 error,
             })?;
-        Pin::new(&mut sender)
+        Pin::new(&mut *sender)
             .start_send(TxMessage::Goodbye {
                 details: HashMap::default(),
                 reason,
@@ -41,8 +42,8 @@ async fn close_impl<T: Transport>(
     }
 
     {
-        let sender = task_tracker.lock_sender().await;
-        poll_fn(|cx| Pin::new(&mut sender).poll_flush(cx))
+        let mut sender = task_tracker.get_sender().lock().await;
+        poll_fn(|cx| Pin::new(&mut *sender).poll_flush(cx))
             .await
             .map_err(|error| WampError::SinkFlushFailed {
                 message_type: "GOODBYE (flush)",

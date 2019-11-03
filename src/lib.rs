@@ -37,6 +37,8 @@ use serde::{
     Serialize, Serializer,
 };
 
+pub use client::*;
+
 /// Contains protocol-level details.
 ///
 /// If you aren't defining your own transport type, you shouldn't need to worry about this module.
@@ -45,15 +47,10 @@ pub mod proto;
 /// Contains [`Transport`] implementations.
 pub mod transport;
 
-/// Useful types for [`Transport`] implementations.
-pub mod pollable;
-
 mod client;
 mod error;
+mod pollable;
 mod uri;
-
-pub use client::*;
-pub use uri::*;
 
 use pollable::PollableSet;
 use proto::*;
@@ -169,20 +166,28 @@ impl Id<SessionScope> {
 // the transport).
 
 /// A strucutred map of incoming ERROR messages.
+#[derive(Default, Debug)]
 pub struct Errors {
+    /// Errors resulting from a SUBSCRIBE attempt.
     #[cfg(feature = "subscriber")]
     pub subscribe: PollableSet<rx::Error>,
+    /// Errors resulting from an UNSUBSCRIBE attempt.
     #[cfg(feature = "subscriber")]
     pub unsubscribe: PollableSet<rx::Error>,
 
+    /// Errors resulting from a PUBLISH attempt.
     #[cfg(feature = "publisher")]
     pub publish: PollableSet<rx::Error>,
 
+    /// Errors resulting from a REGISTER attempt.
     #[cfg(feature = "callee")]
     pub register: PollableSet<rx::Error>,
+    /// Errors resulting from an UNREGISTER attempt.
     #[cfg(feature = "callee")]
     pub unregister: PollableSet<rx::Error>,
 
+    /// Errors resulting from a CALL attempt (either from the
+    /// dealer or the callee).
     #[cfg(feature = "caller")]
     pub call: PollableSet<rx::Error>,
 }
@@ -226,37 +231,10 @@ pub struct MessageBuffer {
     #[cfg(feature = "caller")]
     pub result: PollableSet<rx::Result>,
 }
-impl MessageBuffer {
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        let mut len = self.welcome.len() + self.abort.len() + self.goodbye.len() + self.error.len();
-
-        #[cfg(feature = "subscriber")]
-        {
-            len += self.subscribed.len() + self.unsubscribed.len() + self.event.len();
-        }
-
-        #[cfg(feature = "publisher")]
-        {
-            len += self.published.len();
-        }
-
-        #[cfg(feature = "callee")]
-        {
-            len += self.registered.len() + self.unregistered.len() + self.invocation.len();
-        }
-
-        #[cfg(feature = "caller")]
-        {
-            len += self.result.len();
-        }
-
-        len
-    }
-}
 
 #[cfg(test)]
 mod tests {
+    use super::uri::Uri;
     use super::*;
 
     #[test]
@@ -265,7 +243,7 @@ mod tests {
         let id2 = Id::<GlobalScope>::generate();
         assert!(id1 != id2);
 
-        let id3 = id1.clone();
+        let id3 = id1;
         assert_eq!(id1, id3);
     }
 
@@ -279,7 +257,7 @@ mod tests {
             value: 12345,
             _pd: PhantomData,
         };
-        let id3 = id1.clone();
+        let id3 = id1;
 
         assert!(id1 != id2);
         assert_eq!(id1, id3);
@@ -291,7 +269,7 @@ mod tests {
         let id2 = Id::<SessionScope>::next();
         assert!(id1 != id2);
 
-        let id3 = id1.clone();
+        let id3 = id1;
         assert_eq!(id1, id3);
     }
 

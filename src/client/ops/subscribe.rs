@@ -4,19 +4,22 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use futures::{
-    future::{poll_fn, select, FutureExt},
+    future::{poll_fn, select},
     pin_mut, select,
 };
 use tokio::prelude::*;
 use tokio::sync::oneshot;
 
 use crate::{
-    client::{watch_for_client_state_change, Broadcast, Client, ClientTaskTracker},
+    client::{
+        watch_for_client_state_change, Broadcast, Client, ClientTaskTracker, SubscriptionStream,
+    },
     error::WampError,
     pollable::PollableSet,
     proto::TxMessage,
     transport::Transport,
-    Id, MessageBuffer, RouterScope, SessionScope, SubscriptionStream, Uri,
+    uri::Uri,
+    Id, MessageBuffer, RouterScope, SessionScope,
 };
 
 async fn subscribe_impl<T: Transport>(
@@ -27,14 +30,14 @@ async fn subscribe_impl<T: Transport>(
     let request_id = Id::<SessionScope>::next();
 
     {
-        let sender = task_tracker.lock_sender().await;
-        poll_fn(|cx| Pin::new(&mut sender).poll_ready(cx))
+        let mut sender = task_tracker.get_sender().lock().await;
+        poll_fn(|cx| Pin::new(&mut *sender).poll_ready(cx))
             .await
             .map_err(|error| WampError::WaitForReadyToSendFailed {
                 message_type: "SUBSCRIBE",
                 error,
             })?;
-        Pin::new(&mut sender)
+        Pin::new(&mut *sender)
             .start_send(TxMessage::Subscribe {
                 topic: topic.clone(),
                 request: request_id,
@@ -47,8 +50,8 @@ async fn subscribe_impl<T: Transport>(
     }
 
     {
-        let sender = task_tracker.lock_sender().await;
-        poll_fn(|cx| Pin::new(&mut sender).poll_flush(cx))
+        let mut sender = task_tracker.get_sender().lock().await;
+        poll_fn(|cx| Pin::new(&mut *sender).poll_flush(cx))
             .await
             .map_err(|error| WampError::SinkFlushFailed {
                 message_type: "SUBSCRIBE",
@@ -128,7 +131,7 @@ impl SubscriptionStream for SubscriptionStreamImpl {
 impl Stream for SubscriptionStreamImpl {
     type Item = Broadcast;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Broadcast>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Broadcast>> {
         trace!("SubscriptionStream wakeup");
 
         match self.stop_receiver.poll_unpin(cx) {
