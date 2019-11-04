@@ -10,7 +10,7 @@ use crate::{
     pollable::PollableValue,
     proto::{msg_code, rx::RxMessage, TxMessage},
     transport::{Transport, TransportError},
-    uri::{known_uri, Uri},
+    uri::known_uri,
     GlobalScope, Id, MessageBuffer,
 };
 
@@ -94,7 +94,7 @@ async fn message_listener_impl<T: Transport>(
                                 .await
                                 .send(TxMessage::Abort {
                                     details: HashMap::default(),
-                                    reason: Uri::raw(known_uri::protocol_violation.to_string()),
+                                    reason: known_uri::protocol_violation,
                                 })
                                 .await
                         } {
@@ -129,9 +129,7 @@ async fn message_listener_impl<T: Transport>(
                                 .await
                                 .send(TxMessage::Goodbye {
                                     details: HashMap::default(),
-                                    reason: Uri::raw(
-                                        known_uri::session_close::goodbye_and_out.to_string(),
-                                    ),
+                                    reason: known_uri::session_close::goodbye_and_out,
                                 })
                                 .await
                         } {

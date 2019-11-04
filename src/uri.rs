@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt;
 
 use regex::Regex;
@@ -9,7 +10,7 @@ pub mod known_uri {
     macro_rules! w_uri {
         ($doc:expr, $name:ident) => {
             #[doc=$doc]
-            pub const $name: &'static str = concat!("wamp.error.", stringify!($name));
+            pub const $name: $crate::uri::Uri = $crate::uri::Uri::raw(concat!("wamp.error.", stringify!($name)));
         };
     }
 
@@ -99,14 +100,14 @@ pub mod known_uri {
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 #[cfg_attr(feature = "ws_transport", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "ws_transport", serde(deny_unknown_fields))]
-pub struct Uri(String);
+pub struct Uri(Cow<'static, str>);
 impl Uri {
     /// Constructs a URI from a textual representation, skipping all validation.
     ///
     /// It is highly recommended to use [`relaxed`] or [`strict`] instead, unless you are writing
     /// a transport implementation.
-    pub fn raw(text: String) -> Self {
-        Uri(text)
+    pub const fn raw(text: &'static str) -> Self {
+        Uri(Cow::Borrowed(text))
     }
 
     /// Constructs and validates a URI from a textual representation.
@@ -118,8 +119,8 @@ impl Uri {
             static ref RE: Regex = Regex::new(r"^([^\s\.#]+\.)*([^\s\.#]+)$").unwrap();
         }
 
-        if RE.is_match(&text.as_ref()) {
-            Some(Uri(text.as_ref().to_string()))
+        if RE.is_match(text.as_ref()) {
+            Some(Uri(Cow::Owned(text.as_ref().to_string())))
         } else {
             None
         }
@@ -136,7 +137,7 @@ impl Uri {
         }
 
         if RE.is_match(&text.as_ref()) {
-            Some(Uri(text.as_ref().to_string()))
+            Some(Uri(Cow::Owned(text.as_ref().to_string())))
         } else {
             None
         }
@@ -144,7 +145,7 @@ impl Uri {
 
     /// Copies the raw string representation of this Uri and returns it.
     pub fn to_raw(&self) -> String {
-        self.0.clone()
+        self.0.clone().into_owned()
     }
 }
 impl fmt::Display for Uri {
