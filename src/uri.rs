@@ -144,8 +144,7 @@ impl Uri {
 
     /// Copies the raw string representation of this Uri and returns it.
     pub fn to_raw(&self) -> String {
-        let Uri(ref val) = self;
-        val.clone()
+        self.0.clone()
     }
 }
 impl fmt::Display for Uri {

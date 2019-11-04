@@ -217,6 +217,7 @@ impl TxMessage {
 
     /// Converts this message to a JSON representation.
     // TODO: UT for this (ugh)
+    // TODO: move this to transport/websocket.rs
     #[cfg(feature = "serde_json")]
     pub fn to_json(&self) -> serde_json::Value {
         use TxMessage::*;
@@ -370,6 +371,8 @@ pub mod rx {
         };
     }
 
+    #[derive(Debug)]
+    #[cfg_attr(test, derive(PartialEq, Eq))]
     pub enum RxMessage {
         Welcome(Welcome),
         Abort(Abort),

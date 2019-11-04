@@ -9,7 +9,7 @@ use crate::{
     client::{ClientState, ClientTaskTracker, RouterCapabilities},
     pollable::PollableValue,
     proto::{msg_code, rx::RxMessage, TxMessage},
-    transport::Transport,
+    transport::{Transport, TransportError},
     uri::{known_uri, Uri},
     GlobalScope, Id, MessageBuffer,
 };
@@ -55,8 +55,8 @@ async fn message_listener_impl<T: Transport>(
     // Poll the stream for new messages forever (or until we are stopped).
     'msg_loop: loop {
         match poll_fn(|cx| stream.poll_next_unpin(cx)).await {
-            Some(message) => {
-                match process_message(message, &received, client_state.read(None)) {
+            Some(stream_value) => {
+                match process_stream_value(stream_value, &received, client_state.read(None)) {
                     ProcessMessageResult::Continue => {}
                     ProcessMessageResult::Welcome {
                         session_id,
@@ -156,18 +156,42 @@ async fn message_listener_impl<T: Transport>(
 
 #[derive(Debug, Eq, PartialEq)]
 enum ProcessMessageResult {
-    // Processed a normal message; continue as usual.
+    // Processed a normal message; continue as usual
     Continue,
+    // Establish a session
     Welcome {
         session_id: Id<GlobalScope>,
         router_capabilities: RouterCapabilities,
     },
+    // Immediately shut down
     Abort,
+    // Clean remote-triggered disconnect
     Goodbye,
+    // Send ABORT and shut down
     ProtocolError,
 }
 
 // Although there are lots of branches, most of them are very straightforward.
+fn process_stream_value(
+    value: Result<RxMessage, TransportError>,
+    received: &MessageBuffer,
+    client_state: ClientState,
+) -> ProcessMessageResult {
+    match value {
+        Err(TransportError::NetworkError(error)) => {
+            error!("Transport reported network error: {}", error);
+            ProcessMessageResult::Abort
+        }
+
+        Err(TransportError::ParseError(error)) => {
+            error!("Transport reported message parse error: {}", error);
+            ProcessMessageResult::ProtocolError
+        }
+
+        Ok(message) => process_message(message, received, client_state),
+    }
+}
+
 #[allow(clippy::cognitive_complexity)]
 fn process_message(
     message: RxMessage,

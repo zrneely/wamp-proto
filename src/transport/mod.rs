@@ -3,14 +3,26 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use failure::Error;
+use failure::{Error, Fail};
 use tokio::prelude::*;
 
 use crate::{rx::RxMessage, TxMessage};
 
 /// A websocket-based transport.
 #[cfg(feature = "ws_transport")]
-pub mod websocket2;
+pub mod websocket;
+
+/// The different kinds of errors a transport could encounter.
+#[derive(Debug, Fail)]
+pub enum TransportError {
+    /// The client will handle a ParseError by sending an ABORT message,
+    /// and then exiting (according to section 5.3.3 of the WAMP spec).
+    #[fail(display = "message parse error: {}", 0)]
+    ParseError(Error),
+    /// The client will simply immediately exit.
+    #[fail(display = "network error: {}", 0)]
+    NetworkError(Error),
+}
 
 /// A transport capable of supporting a WAMP connection.
 ///
@@ -26,14 +38,12 @@ pub mod websocket2;
 /// *not* look for or even be aware of out-of-order messages.
 #[async_trait]
 pub trait Transport {
-    // TODO: Do these have to be Unpin? Can they be?
-
     /// The type of Sink produced by this Transport. This must be named since GATs are not yet
     /// supported.
     type Sink: Sink<TxMessage, Error = Error> + Send + Unpin;
     /// The type of Stream produced by this Transport. This must be named since GATs are not yet
     /// supported.
-    type Stream: Stream<Item = RxMessage> + Send + Unpin;
+    type Stream: Stream<Item = Result<RxMessage, TransportError>> + Send + Unpin;
 
     /// Asynchronously constructs a transport to the router at the given location.
     ///
@@ -54,7 +64,7 @@ pub trait Transport {
 
 /// The types of value which can be sent over WAMP RPC and pub/sub boundaries.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[cfg_attr(feature = "ws_transport", serde(untagged))]
 pub enum TransportableValue {
     /// A non-negative integer.
     Integer(u64),

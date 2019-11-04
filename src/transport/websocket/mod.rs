@@ -1,36 +1,28 @@
+mod parsers;
+
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use failure::{Error, Fail};
-use futures::stream::{SplitSink, SplitStream};
-use tokio::prelude::*;
+use failure::Error;
+use futures::{
+    sink::Sink,
+    stream::{SplitSink, SplitStream, Stream, StreamExt as _},
+};
 use tokio_net::tcp::TcpStream;
 use tokio_tungstenite::{
-    tungstenite::{self, handshake::client::Request, protocol::Message},
+    tungstenite::{handshake::client::Request, protocol::Message},
     MaybeTlsStream, WebSocketStream,
 };
 use url::Url;
 
 use crate::{
-    proto::{rx, TxMessage},
-    transport::Transport,
+    proto::{rx::RxMessage, TxMessage},
+    transport::{Transport, TransportError},
 };
 
-#[derive(Debug, Fail)]
-enum WSError {
-    #[fail(display = "{}", 0)]
-    Tungstenite(tungstenite::Error),
-}
-impl From<tungstenite::Error> for WSError {
-    fn from(err: tungstenite::Error) -> Self {
-        WSError::Tungstenite(err)
-    }
-}
-
 /// A Transport implementation that works over websockets.
-pub struct WebsocketTransport {}
-
+pub enum WebsocketTransport {}
 #[async_trait]
 impl Transport for WebsocketTransport {
     type Sink = WampSinkAdapter;
@@ -92,9 +84,27 @@ pub struct WampStreamAdapter {
     stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
 }
 impl Stream for WampStreamAdapter {
-    type Item = rx::RxMessage;
+    type Item = Result<RxMessage, TransportError>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<rx::RxMessage>> {
-        unimplemented!()
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<RxMessage, TransportError>>> {
+        loop {
+            match Pin::new(&mut self.stream).poll_next(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(Some(Err(error))) => {
+                    return Poll::Ready(Some(Err(TransportError::NetworkError(error.into()))));
+                }
+                Poll::Ready(Some(Ok(message))) => match parsers::parse_message(message) {
+                    Ok(Some(message)) => return Poll::Ready(Some(Ok(message))),
+                    Ok(None) => continue,
+                    Err(error) => {
+                        return Poll::Ready(Some(Err(TransportError::ParseError(error.into()))));
+                    }
+                },
+            }
+        }
     }
 }

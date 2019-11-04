@@ -450,6 +450,7 @@ impl RouterCapabilities {
 
 /// Arguments to an RPC call.
 #[cfg(any(feature = "caller", feature = "callee"))]
+#[derive(Debug)]
 pub struct RpcArgs {
     /// The positional arguments. If there are none, the `Vec` will be empty.
     pub arguments: Vec<TV>,
@@ -459,6 +460,7 @@ pub struct RpcArgs {
 
 /// Return value from an RPC call.
 #[cfg(any(feature = "caller", feature = "callee"))]
+#[derive(Debug)]
 pub struct RpcReturn {
     /// Positional return values. If there are none, set this to an empty `Vec`.
     pub arguments: Vec<TV>,
@@ -468,6 +470,7 @@ pub struct RpcReturn {
 
 /// A message broadcast on a channel.
 #[cfg(any(feautre = "publisher", feature = "subscriber"))]
+#[derive(Debug)]
 pub struct Broadcast {
     /// Positional values. If there are none, this should be an empty `Vec`.
     pub arguments: Vec<TV>,

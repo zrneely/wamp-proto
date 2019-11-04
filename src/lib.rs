@@ -44,13 +44,15 @@ pub use client::*;
 /// If you aren't defining your own transport type, you shouldn't need to worry about this module.
 pub mod proto;
 
-/// Contains [`Transport`] implementations.
+/// Contains the [`Transport`] trait and the Websocket implementations.
 pub mod transport;
+
+/// The [`Uri`] type and known URIs.
+pub mod uri;
 
 mod client;
 mod error;
 mod pollable;
-mod uri;
 
 use pollable::PollableSet;
 use proto::*;
