@@ -7,8 +7,7 @@
 //! This crate implements the WAMP basic profile, and (for now) *none* of the advanced profile.
 
 #![deny(missing_docs)]
-#![allow(dead_code)]
-#![recursion_limit = "512"] // for a big select! in client/ops/initialize.rs
+#![forbid(unsafe_code)]
 
 #[macro_use]
 extern crate failure_derive;
