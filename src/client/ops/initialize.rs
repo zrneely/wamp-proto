@@ -67,15 +67,16 @@ pub(in crate::client) async fn initialize<T: 'static + Transport>(
         stop_receiver,
     ));
 
-    // Wait for the message listener to set the client state to "Established".
-    poll_fn(|cx| {
-        if client_state.read(Some(cx)).is_established() {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
+    // Wait for the message listener to set the client state to anything other than "Establishing".
+    poll_fn(|cx| match client_state.read(Some(cx)) {
+        ClientState::Establishing => Poll::Pending,
+        ClientState::Established { .. } => Poll::Ready(Ok(())),
+        state => {
+            warn!("Client state was set to {:?} during client setup", state);
+            Poll::Ready(Err(WampError::InvalidClientState))
         }
     })
-    .await;
+    .await?;
 
     Ok(Client {
         received,
