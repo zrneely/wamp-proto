@@ -8,6 +8,7 @@ extern crate wamp_proto;
 use wamp_proto::{transport::websocket::WebsocketTransport, uri::Uri, Client, ClientConfig};
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use futures::stream::StreamExt as _;
 
@@ -40,10 +41,10 @@ async fn integration_1() {
     });
     tokio::spawn(subscription_future);
 
+    tokio::timer::delay_for(Duration::from_secs(60 * 60)).await; // 1 hour
+
     client
-        .close(Uri::raw(
-            wamp_proto::uri::known_uri::session_close::system_shutdown.into(),
-        ))
+        .close(wamp_proto::uri::known_uri::session_close::system_shutdown)
         .await
         .unwrap();
 }

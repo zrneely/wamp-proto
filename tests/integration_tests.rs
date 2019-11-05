@@ -8,4 +8,4 @@ extern crate tokio_process;
 extern crate uuid;
 extern crate wamp_proto;
 
-// mod integration;
+mod integration;
