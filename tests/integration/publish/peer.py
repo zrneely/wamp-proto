@@ -25,6 +25,7 @@ async def publish_one_message_on_joined(session, details):
 
 
 def run_test_peer(component, test_name):
+    # pylint: disable=unused-variable
     @component.on_join
     async def joined(session, details):
         if test_name == 'publishOneMessage':

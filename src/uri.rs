@@ -166,8 +166,8 @@ mod tests {
 
     #[test]
     fn uri_raw_test() {
-        assert_eq!("foo", Uri::raw("foo".into()).0);
-        assert_eq!("~~~~1234_*()", Uri::raw("~~~~1234_*()".into()).0);
+        assert_eq!("foo", Uri::raw("foo").0);
+        assert_eq!("~~~~1234_*()", Uri::raw("~~~~1234_*()").0);
     }
 
     #[test]

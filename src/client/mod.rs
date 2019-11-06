@@ -405,6 +405,15 @@ impl<T: 'static + Transport> Client<T> {
     pub fn is_transport_closed(&self) -> bool {
         self.state.read(None) == ClientState::TransportClosed
     }
+
+    /// Waits for the client to enter the `TransportClosed` state.
+    pub async fn wait_for_close(&self) {
+        poll_fn(|cx| match self.state.read(Some(cx)) {
+            ClientState::TransportClosed => Poll::Ready(()),
+            _ => Poll::Pending,
+        })
+        .await
+    }
 }
 impl<T: Transport> Drop for Client<T> {
     fn drop(&mut self) {

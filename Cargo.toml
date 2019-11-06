@@ -25,8 +25,8 @@ url = "2"
 
 [dev_dependencies]
 env_logger = "0.6"
-tokio-process = "0.2"
 uuid = { version = "0.7", features = ["v4"] }
+tokio = { version = "0.2.0-alpha.6", features = ["process"] }
 
 [features]
 default = ["callee", "caller", "publisher", "subscriber", "ws_transport"]

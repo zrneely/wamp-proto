@@ -131,7 +131,7 @@ mod tests {
         assert_eq!(None, tv.clone().into_dict());
         assert_eq!(None, tv.clone().into_int());
         assert_eq!(None, tv.clone().into_list());
-        assert_eq!(None, tv.clone().into_string());
+        assert_eq!(None, tv.into_string());
 
         let tv = TransportableValue::Dict(Default::default());
         assert_eq!(None, tv.clone().into_bool());
@@ -141,14 +141,14 @@ mod tests {
         );
         assert_eq!(None, tv.clone().into_int());
         assert_eq!(None, tv.clone().into_list());
-        assert_eq!(None, tv.clone().into_string());
+        assert_eq!(None, tv.into_string());
 
         let tv = TransportableValue::Integer(12345);
         assert_eq!(None, tv.clone().into_bool());
         assert_eq!(None, tv.clone().into_dict());
         assert_eq!(Some(12345), tv.clone().into_int());
         assert_eq!(None, tv.clone().into_list());
-        assert_eq!(None, tv.clone().into_string());
+        assert_eq!(None, tv.into_string());
 
         let tv = TransportableValue::List(vec![TransportableValue::Integer(12345)]);
         assert_eq!(None, tv.clone().into_bool());
@@ -158,13 +158,13 @@ mod tests {
             Some(vec![TransportableValue::Integer(12345)]),
             tv.clone().into_list()
         );
-        assert_eq!(None, tv.clone().into_string());
+        assert_eq!(None, tv.into_string());
 
         let tv = TransportableValue::String("asdf".into());
         assert_eq!(None, tv.clone().into_bool());
         assert_eq!(None, tv.clone().into_dict());
         assert_eq!(None, tv.clone().into_int());
         assert_eq!(None, tv.clone().into_list());
-        assert_eq!(Some("asdf".into()), tv.clone().into_string());
+        assert_eq!(Some("asdf".into()), tv.into_string());
     }
 }

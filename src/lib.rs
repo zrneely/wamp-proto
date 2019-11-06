@@ -356,7 +356,7 @@ mod tests {
     fn uri_deserialization_test() {
         let value = json!("a.b.c.d");
         assert_eq!(
-            Uri::raw("a.b.c.d".into()),
+            Uri::raw("a.b.c.d"),
             serde_json::from_value::<Uri>(value).unwrap()
         );
 

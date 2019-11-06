@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::stream::StreamExt as _;
+use tokio::future::FutureExt as _;
 
 lazy_static! {
     static ref SAVED_CLIENT: Arc<Mutex<Option<Client<WebsocketTransport>>>> =
@@ -41,10 +42,9 @@ async fn integration_1() {
     });
     tokio::spawn(subscription_future);
 
-    tokio::timer::delay_for(Duration::from_secs(60 * 60)).await; // 1 hour
-
     client
-        .close(wamp_proto::uri::known_uri::session_close::system_shutdown)
+        .wait_for_close()
+        .timeout(Duration::from_secs(60 * 60))
         .await
         .unwrap();
 }

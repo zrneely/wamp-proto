@@ -159,7 +159,7 @@ mod helpers {
             assert!(parse_uri(&json!(1)).is_err());
             assert!(parse_uri(&json!([1, 2, 3])).is_err());
             assert_eq!(
-                Uri::raw("asdf.ghjk".into()),
+                Uri::raw("asdf.ghjk"),
                 parse_uri(&json!("asdf.ghjk")).unwrap()
             );
             assert!(parse_uri(&json!("a.#.b")).is_err());
@@ -533,7 +533,7 @@ mod tests {
                     details.insert("y".into(), TV::Bool(true));
                     details
                 },
-                reason: Uri::raw("org.foo.bar.error".into()),
+                reason: Uri::raw("org.foo.bar.error"),
             },
             parse_abort(&[json!({"x": 1, "y": true}), json!("org.foo.bar.error")]).unwrap()
         );
@@ -571,7 +571,7 @@ mod tests {
                     details.insert("x".into(), TV::Integer(1));
                     details
                 },
-                error: Uri::raw("org.foo.bar.error".into()),
+                error: Uri::raw("org.foo.bar.error"),
                 arguments: None,
                 arguments_kw: None,
             },
@@ -594,7 +594,7 @@ mod tests {
                     details.insert("x".into(), TV::Integer(1));
                     details
                 },
-                error: Uri::raw("org.foo.bar.error".into()),
+                error: Uri::raw("org.foo.bar.error"),
                 arguments: Some(vec![TV::Integer(1), TV::String("asdf".into())]),
                 arguments_kw: Some({
                     let mut args = HashMap::new();
@@ -623,7 +623,7 @@ mod tests {
                     details.insert("x".into(), TV::Integer(1));
                     details
                 },
-                error: Uri::raw("org.foo.bar.error".into()),
+                error: Uri::raw("org.foo.bar.error"),
                 arguments: Some(vec![]),
                 arguments_kw: Some({
                     let mut args = HashMap::new();
@@ -652,7 +652,7 @@ mod tests {
                     details.insert("x".into(), TV::Integer(1));
                     details
                 },
-                error: Uri::raw("org.foo.bar.error".into()),
+                error: Uri::raw("org.foo.bar.error"),
                 arguments: Some(vec![TV::Integer(1), TV::String("asdf".into())]),
                 arguments_kw: None,
             },
@@ -729,7 +729,7 @@ mod tests {
                     details.insert("y".into(), TV::Bool(true));
                     details
                 },
-                reason: Uri::raw("org.foo.bar.closed".into()),
+                reason: Uri::raw("org.foo.bar.closed"),
             },
             parse_goodbye(&[json!({"x": 1, "y": true}), json!("org.foo.bar.closed")]).unwrap()
         );
