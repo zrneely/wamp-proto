@@ -1,24 +1,12 @@
-extern crate futures;
-#[macro_use]
-extern crate lazy_static;
-extern crate env_logger;
-extern crate tokio;
-extern crate wamp_proto;
-
 use wamp_proto::{transport::websocket::WebsocketTransport, uri::Uri, Client, ClientConfig};
 
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::stream::StreamExt as _;
 use tokio::future::FutureExt as _;
 
-lazy_static! {
-    static ref SAVED_CLIENT: Arc<Mutex<Option<Client<WebsocketTransport>>>> =
-        Arc::new(Mutex::new(None));
-}
-
 #[tokio::test]
+#[ignore]
 async fn integration_1() {
     env_logger::init();
 

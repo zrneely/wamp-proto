@@ -54,7 +54,7 @@ pub async fn start_peer<T: AsRef<Path>>(
     test: &str,
     router: &RouterHandle,
 ) -> PeerHandle {
-    let mut peer = process::Command::new("python")
+    let mut peer = process::Command::new("python3")
         .arg({
             let mut path = PathBuf::new();
             path.push(".");

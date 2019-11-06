@@ -103,9 +103,6 @@ pub mod known_uri {
 pub struct Uri(Cow<'static, str>);
 impl Uri {
     /// Constructs a URI from a textual representation, skipping all validation.
-    ///
-    /// It is highly recommended to use [`relaxed`] or [`strict`] instead, unless you are writing
-    /// a transport implementation.
     pub const fn raw(text: &'static str) -> Self {
         Uri(Cow::Borrowed(text))
     }

@@ -19,21 +19,31 @@ matrix:
 
 before_install:
   - export PATH=$HOME/.local/bin:$PATH
-  - pip3 install --user crossbar autobahn
+  - pip3 install wheel msgpack
+  - pip3 install --user crossbar==19.10.1 autobahn==19.10.1
+  - pip3 --version
+  - python3 --version
 
 addons:
   apt:
+    update: true
     packages:
     - python3-pip
     - python3-setuptools
+    - python3-dev
     - build-essential
     - libssl-dev
     - libreadline-dev
     - libbz2-dev
     - libsqlite3-dev
     - libncurses5-dev
+    - libffi-dev
+    - libsnappy-dev
+    - libunwind-dev
 
 env:
   global:
     TRAVIS_CARGO_NIGHTLY_FEATURE=""
     RUST_TEST_THREADS=1
+    RUST_BACKTRACE=1
+    RUST_LOG="wamp_proto=trace"
