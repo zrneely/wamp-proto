@@ -27,6 +27,7 @@ url = "2"
 env_logger = "0.6"
 uuid = { version = "0.7", features = ["v4"] }
 tokio = { version = "0.2.0-alpha.6", features = ["process"] }
+tempfile = "3"
 
 [features]
 default = ["callee", "caller", "publisher", "subscriber", "ws_transport"]

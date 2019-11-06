@@ -126,12 +126,9 @@ impl RouterHandle {
 impl Drop for RouterHandle {
     fn drop(&mut self) {
         self.router.kill().expect("could not kill router");
-        fs::remove_dir_all(&self.crossbar_dir).unwrap_or_else(|err| {
-            eprintln!(
-                "failed to remove crossbar config dir {:?}: {}",
-                self.crossbar_dir, err
-            )
-        });
+        if let Err(err) = fs::remove_dir_all(&self.crossbar_dir) {
+            println!("Failed to delete temp dir {:?}: {}", self.crossbar_dir, err);
+        }
     }
 }
 
@@ -195,7 +192,7 @@ pub async fn start_router() -> RouterHandle {
 
 async fn set_crossbar_configuration(port: u16) -> PathBuf {
     let crossbar_dir = {
-        let mut path = PathBuf::new();
+        let mut path = tempfile::tempdir().unwrap().into_path();
         path.push(".");
         path.push(format!("{}", Uuid::new_v4()));
         path
