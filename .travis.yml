@@ -4,11 +4,9 @@ rust:
   - stable
   - beta
   - nightly
+dist: xenial
 
-matrix:
-  include:
-    - os: linux
-      dist: xenial
+jobs:
   allow_failures:
     - rust: nightly
   fast_finish: true
