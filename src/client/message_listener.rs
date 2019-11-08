@@ -169,7 +169,6 @@ enum ProcessMessageResult {
     ProtocolError,
 }
 
-// Although there are lots of branches, most of them are very straightforward.
 fn process_stream_value(
     value: Result<RxMessage, TransportError>,
     received: &MessageBuffer,
@@ -190,6 +189,7 @@ fn process_stream_value(
     }
 }
 
+// Although there are lots of branches, most of them are very straightforward.
 #[allow(clippy::cognitive_complexity)]
 fn process_message(
     message: RxMessage,
