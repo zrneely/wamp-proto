@@ -9,10 +9,10 @@ use futures::{
     sink::Sink,
     stream::{SplitSink, SplitStream, Stream, StreamExt as _},
 };
-use tokio_net::tcp::TcpStream;
+use tokio::net::TcpStream;
 use tokio_tungstenite::{
     tungstenite::{handshake::client::Request, protocol::Message},
-    MaybeTlsStream, WebSocketStream,
+    WebSocketStream,
 };
 use url::Url;
 
@@ -48,40 +48,32 @@ impl Transport for WebsocketTransport {
 
 /// A sink for TxMessages.
 pub struct WampSinkAdapter {
-    sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
+    sink: SplitSink<WebSocketStream<TcpStream>, Message>,
 }
 impl Sink<TxMessage> for WampSinkAdapter {
     type Error = Error;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
-        Pin::new(&mut self.sink)
-            .poll_ready(cx)
-            .map_err(|err| err.into())
+        self.sink.poll_ready(cx).map_err(|err| err.into())
     }
 
     fn start_send(mut self: Pin<&mut Self>, item: TxMessage) -> Result<(), Error> {
         let message = Message::text(serde_json::to_string(&item.to_json())?);
-        Pin::new(&mut self.sink)
-            .start_send(message)
-            .map_err(|err| err.into())
+        self.sink.start_send(message).map_err(|err| err.into())
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
-        Pin::new(&mut self.sink)
-            .poll_flush(cx)
-            .map_err(|err| err.into())
+        self.sink.poll_flush(cx).map_err(|err| err.into())
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
-        Pin::new(&mut self.sink)
-            .poll_close(cx)
-            .map_err(|err| err.into())
+        self.sink.poll_close(cx).map_err(|err| err.into())
     }
 }
 
 /// A stream of RxMessages.
 pub struct WampStreamAdapter {
-    stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+    stream: SplitStream<WebSocketStream<TcpStream>>,
 }
 impl Stream for WampStreamAdapter {
     type Item = Result<RxMessage, TransportError>;
@@ -91,7 +83,7 @@ impl Stream for WampStreamAdapter {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RxMessage, TransportError>>> {
         loop {
-            match Pin::new(&mut self.stream).poll_next(cx) {
+            match self.stream.poll_next(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Ready(Some(Err(error))) => {

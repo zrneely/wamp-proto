@@ -155,11 +155,14 @@ impl<T> PollableSet<T> {
 mod tests {
     use super::*;
 
-    use tokio::future::poll_fn;
+    use futures::future::poll_fn;
 
     #[test]
     fn pollable_set_test() {
-        let mut runtime = tokio::runtime::current_thread::Runtime::new().unwrap();
+        let mut runtime = tokio::runtime::Builder::new()
+            .basic_scheduler()
+            .build()
+            .unwrap();
 
         let set = PollableSet::<u32>::new();
         assert_eq!(0, set.items.read().len());

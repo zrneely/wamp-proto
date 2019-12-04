@@ -5,9 +5,8 @@ use std::task::{Context, Poll};
 
 use futures::{
     future::{poll_fn, select},
-    pin_mut, select,
+    pin_mut, select, FutureExt, Sink, Stream,
 };
-use tokio::prelude::*;
 use tokio::sync::oneshot;
 
 use crate::{

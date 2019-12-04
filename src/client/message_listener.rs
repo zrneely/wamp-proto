@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use futures::{future::poll_fn, pin_mut, select};
-use tokio::prelude::*;
+use futures::{future::poll_fn, pin_mut, select, FutureExt, SinkExt, StreamExt};
 use tokio::sync::oneshot;
 
 use crate::{

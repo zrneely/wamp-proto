@@ -4,7 +4,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use failure::Error;
-use futures::{future::poll_fn, SinkExt};
+use futures::{future::poll_fn, SinkExt, Stream};
 use tokio::sync::oneshot;
 
 use crate::{
@@ -199,7 +199,7 @@ impl<'a> ClientConfig<'a> {
 // TODO: move to subscribe.rs and re-export it here.
 /// An extension on top of a Stream that is used by subscriptions.
 #[cfg(feature = "subscriber")]
-pub trait SubscriptionStream: tokio::stream::Stream<Item = Broadcast> {
+pub trait SubscriptionStream: Stream<Item = Broadcast> {
     /// Returns the ID of this subscription.
     fn get_subscription_id(&self) -> Id<RouterScope>;
 }

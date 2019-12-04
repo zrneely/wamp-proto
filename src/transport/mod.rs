@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use failure::{Error, Fail};
-use tokio::prelude::*;
+use futures::{Sink, Stream};
 
 use crate::{rx::RxMessage, TxMessage};
 

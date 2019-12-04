@@ -3,9 +3,8 @@ use std::sync::Arc;
 
 use futures::{
     future::{poll_fn, select},
-    pin_mut, select,
+    pin_mut, select, FutureExt, Sink,
 };
-use tokio::prelude::*;
 
 use crate::{
     client::{watch_for_client_state_change, Client, ClientTaskTracker, SubscriptionStream},
