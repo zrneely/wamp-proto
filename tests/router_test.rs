@@ -1,5 +1,10 @@
-use wamp_proto::{transport::websocket::WebsocketTransport, uri::Uri, Client, ClientConfig};
+use wamp_proto::{
+    transport::{websocket::WebsocketTransport, TransportableValue as TV},
+    uri::Uri,
+    Broadcast, Client, ClientConfig,
+};
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use futures::stream::StreamExt as _;
@@ -19,7 +24,7 @@ async fn integration_1() {
         .unwrap();
 
     let test_channel_subscription = client
-        .subscribe(Uri::strict("org.test.channel").unwrap())
+        .subscribe(&Uri::strict("org.test.channel").unwrap())
         .await
         .unwrap();
 
@@ -29,6 +34,17 @@ async fn integration_1() {
         }
     });
     tokio::spawn(subscription_future);
+
+    client
+        .publish(
+            &Uri::strict("org.test.channel").unwrap(),
+            Broadcast {
+                arguments: vec![TV::Integer(1)],
+                arguments_kw: HashMap::default(),
+            },
+        )
+        .await
+        .unwrap();
 
     client
         .wait_for_close()

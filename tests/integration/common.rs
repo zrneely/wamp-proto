@@ -11,9 +11,9 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 
-use futures::pin_mut;
+use futures::{pin_mut, stream::StreamExt as _};
 use tokio::{
-    codec::{FramedRead, LinesCodec},
+    codec::{FramedRead, LinesCodec, LinesCodecError},
     net::process,
     prelude::*,
 };
@@ -23,7 +23,7 @@ pub const TEST_REALM: &str = "wamp_proto_test";
 
 pub struct PeerHandle {
     _peer: process::Child,
-    stdout: Pin<Box<FramedRead<process::ChildStdout, LinesCodec>>>,
+    stdout: Pin<Box<dyn Stream<Item = Result<String, LinesCodecError>>>>,
     panic_on_drop: bool,
 }
 impl PeerHandle {
@@ -72,7 +72,7 @@ pub async fn start_peer<T: AsRef<Path>>(
         // Tell python to use UTF-8 for I/O
         .env("PYTHONIOENCODING", "utf8")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::inherit())
         .spawn()
         .expect("could not start python");
 
@@ -81,7 +81,12 @@ pub async fn start_peer<T: AsRef<Path>>(
         let stdout = FramedRead::new(
             peer.stdout().as_mut().unwrap(),
             LinesCodec::new_with_max_length(1024),
-        );
+        )
+        .inspect(|line| {
+            if let Ok(line) = line {
+                println!("Peer stdout: {}", line);
+            }
+        });
 
         // Wait for the peer to signal that it's ready.
         let filtered_stdout = stdout.filter_map(|line| {
@@ -99,10 +104,17 @@ pub async fn start_peer<T: AsRef<Path>>(
         filtered_stdout.next().await;
     }
 
-    let stdout = Box::pin(FramedRead::new(
-        peer.stdout().take().unwrap(),
-        LinesCodec::new_with_max_length(1024),
-    ));
+    let stdout = Box::pin(
+        FramedRead::new(
+            peer.stdout().take().unwrap(),
+            LinesCodec::new_with_max_length(1024),
+        )
+        .inspect(|line| {
+            if let Ok(line) = line {
+                println!("Peer stdout: {}", line);
+            }
+        }),
+    );
 
     PeerHandle {
         _peer: peer,
@@ -150,37 +162,60 @@ pub async fn start_router() -> RouterHandle {
             path.push(".crossbar");
             path
         })
+        .arg("--loglevel")
+        .arg("trace")
         // Tell python (crossbar) to flush stdout after every line
         .env("PYTHONUNBUFFERED", "1")
         // Tell python (crossbar) to use UTF-8 for I/O
         .env("PYTHONIOENCODING", "utf8")
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
         .expect("could not run crossbar");
 
     println!("Spawned child process: {}", router.id());
 
     // Wait for the router to be ready.
-    let stdout = FramedRead::new(
-        router.stdout().as_mut().unwrap(),
-        LinesCodec::new_with_max_length(1024),
-    );
-
-    // Wait for the peer to signal that it's ready.
-    let filtered_stdout = stdout.filter_map(|line| {
-        async move {
+    {
+        let stdout = FramedRead::new(
+            router.stdout().as_mut().unwrap(),
+            LinesCodec::new_with_max_length(1024),
+        )
+        .inspect(|line| {
             if let Ok(line) = line {
-                if line.contains("Ok, local node configuration booted successfully!") {
-                    return Some(line);
-                }
+                println!("Router stdout: {}", line);
             }
-            None
-        }
-    });
+        });
 
-    pin_mut!(filtered_stdout);
-    filtered_stdout.next().await;
+        // Wait for the peer to signal that it's ready.
+        let filtered_stdout = stdout.filter_map(|line| {
+            async move {
+                if let Ok(line) = line {
+                    if line.contains("Ok, local node configuration booted successfully!") {
+                        return Some(line);
+                    }
+                }
+                None
+            }
+        });
+
+        pin_mut!(filtered_stdout);
+        filtered_stdout.next().await;
+    }
+
+    tokio::spawn(
+        FramedRead::new(
+            router.stdout().take().unwrap(),
+            LinesCodec::new_with_max_length(1024),
+        )
+        .map(|line| {
+            if let Ok(line) = line {
+                println!("Router stdout: {}", line);
+            }
+        })
+        .collect::<Vec<_>>()
+        .map(|_| ()),
+    );
 
     println!("Crossbar router ready!");
     RouterHandle {
@@ -202,7 +237,8 @@ async fn set_crossbar_configuration(port: u16) -> PathBuf {
         .arg("init")
         .arg("--appdir")
         .arg(&crossbar_dir)
-        .stdout(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .status()
         .await
         .expect("could not run `crossbar init`");

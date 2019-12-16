@@ -15,7 +15,7 @@ async fn connect_close() {
         .unwrap();
 
     client
-        .close(Uri::strict("wamp.error.goodbye").unwrap())
+        .close(&Uri::strict("wamp.error.goodbye").unwrap())
         .await
         .unwrap();
 }

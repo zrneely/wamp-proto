@@ -26,7 +26,7 @@ async fn publish_one_message() {
 
     client
         .publish(
-            Uri::strict("org.test.topic1").unwrap(),
+            &Uri::strict("org.test.topic1").unwrap(),
             Broadcast {
                 arguments: vec![TV::Integer(42)],
                 arguments_kw: HashMap::new(),
@@ -36,7 +36,7 @@ async fn publish_one_message() {
         .unwrap();
 
     client
-        .close(wamp_proto::uri::known_uri::session_close::system_shutdown)
+        .close(&wamp_proto::uri::known_uri::session_close::system_shutdown)
         .await
         .unwrap();
 

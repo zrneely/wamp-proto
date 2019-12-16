@@ -19,7 +19,7 @@ use crate::{
 
 async fn close_impl<T: Transport>(
     task_tracker: Arc<ClientTaskTracker<T>>,
-    reason: Uri,
+    reason: &Uri,
     received: Arc<MessageBuffer>,
 ) -> Result<(), WampError> {
     {
@@ -33,7 +33,7 @@ async fn close_impl<T: Transport>(
         Pin::new(&mut *sender)
             .start_send(TxMessage::Goodbye {
                 details: HashMap::default(),
-                reason,
+                reason: reason.clone(),
             })
             .map_err(|error| WampError::MessageSendFailed {
                 message_type: "GOODBYE",
@@ -60,7 +60,7 @@ async fn close_impl<T: Transport>(
 /// Asynchronous function to cleanly close a connection.
 pub(in crate::client) async fn close<T: Transport>(
     client: &Client<T>,
-    reason: Uri,
+    reason: &Uri,
 ) -> Result<(), WampError> {
     let wfcsc = watch_for_client_state_change(client.state.clone(), |state| {
         state == ClientState::ShuttingDown || state == ClientState::Closed

@@ -282,14 +282,27 @@ impl<T: 'static + Transport> Client<T> {
     /// Note that in particular, if publishing the message fails because the broker elects to
     /// refuse it, that failure will not be reflected in the [`Result`] this returns.
     #[cfg(feature = "publisher")]
-    pub async fn publish(&mut self, topic: Uri, broadcast: Broadcast) -> Result<(), WampError> {
+    pub async fn publish(&mut self, topic: &Uri, message: Broadcast) -> Result<(), WampError> {
+        self.publish_unordered(topic, std::iter::once(message))
+            .await
+    }
+
+    /// Publishes a message, requesting acknowledgement. The returned future will not complete
+    /// until acknowledgement is received. The returned value is the Publication ID of the
+    /// published message.
+    #[cfg(feature = "publisher")]
+    pub async fn publish_with_ack(
+        &mut self,
+        topic: &Uri,
+        message: Broadcast,
+    ) -> Result<Id<GlobalScope>, WampError> {
         match self.state.read(None) {
             ClientState::Established {
                 router_capabilities,
                 ..
             } => {
                 if router_capabilities.broker {
-                    ops::publish::publish(self, topic, broadcast).await
+                    ops::publish::publish_with_ack(self, topic, message).await
                 } else {
                     Err(WampError::RouterSupportMissing("broker"))
                 }
@@ -301,17 +314,30 @@ impl<T: 'static + Transport> Client<T> {
         }
     }
 
-    //#[cfg(feature = "publisher")]
-    ///// Publishes a message, requesting acknowledgement. The returned future will not complete
-    ///// until acknowledgement is received. The returned value is the Publication ID of the
-    ///// published message.
-    //fn publish_with_ack(
-    //    &mut self,
-    //    topic: Uri,
-    //    broadcast: Broadcast
-    //) -> impl Future<Item=Id<GlobalScope>, Error=Error> {
-    //    unimplemented!()
-    //}
+    /// Publishes many messages to the same topic, in any order.
+    /// Acknowledgement will not be requested for any of them.
+    #[cfg(feature = "publisher")]
+    pub async fn publish_unordered<I>(&mut self, topic: &Uri, messages: I) -> Result<(), WampError>
+    where
+        I: IntoIterator<Item = Broadcast>,
+    {
+        match self.state.read(None) {
+            ClientState::Established {
+                router_capabilities,
+                ..
+            } => {
+                if router_capabilities.broker {
+                    ops::publish::publish(self, topic, messages).await
+                } else {
+                    Err(WampError::RouterSupportMissing("broker"))
+                }
+            }
+            state => {
+                warn!("Tried to publish when client state was {:?}", state);
+                Err(WampError::InvalidClientState)
+            }
+        }
+    }
 
     /// Subscribes to a channel.
     ///
@@ -334,7 +360,7 @@ impl<T: 'static + Transport> Client<T> {
     /// * If the router does not acknowledge the subscription within the client timeout period, the returned
     /// future will resolve with an error.
     #[cfg(feature = "subscriber")]
-    pub async fn subscribe(&mut self, topic: Uri) -> Result<impl SubscriptionStream, WampError> {
+    pub async fn subscribe(&mut self, topic: &Uri) -> Result<impl SubscriptionStream, WampError> {
         match self.state.read(None) {
             ClientState::Established {
                 router_capabilities,
@@ -381,7 +407,7 @@ impl<T: 'static + Transport> Client<T> {
     /// the connected router actively acknowledges our disconnect within the shutdown_timeout,
     /// and resolves with an error otherwise. After this is called (but before it resolves), all
     /// incoming messages except acknowledgement of our disconnection are ignored.
-    pub async fn close(&mut self, reason: Uri) -> Result<(), Error> {
+    pub async fn close(&mut self, reason: &Uri) -> Result<(), Error> {
         self.state.write(ClientState::ShuttingDown);
 
         // Stop listening for incoming Pub/Sub events and RPC invocations.

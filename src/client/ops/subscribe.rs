@@ -24,7 +24,7 @@ use crate::{
 
 async fn subscribe_impl<T: Transport>(
     task_tracker: Arc<ClientTaskTracker<T>>,
-    topic: Uri,
+    topic: &Uri,
     received: Arc<MessageBuffer>,
 ) -> Result<impl SubscriptionStream, WampError> {
     let request_id = Id::<SessionScope>::next();
@@ -108,7 +108,7 @@ async fn subscribe_impl<T: Transport>(
 
 pub(in crate::client) async fn subscribe<T: Transport>(
     client: &Client<T>,
-    topic: Uri,
+    topic: &Uri,
 ) -> Result<impl SubscriptionStream, WampError> {
     let wfcsc =
         watch_for_client_state_change(client.state.clone(), |state| state.is_established()).fuse();
