@@ -68,7 +68,7 @@ pub async fn start_peer<T: AsRef<Path>>(
         .expect("could not start python");
 
     // Wait for the peer to signal that it's ready.
-    let mut stdout = BufReader::new(peer.stdout().take().unwrap()).lines();
+    let mut stdout = BufReader::new(peer.stdout.take().unwrap()).lines();
 
     loop {
         match stdout.next_line().await {
@@ -138,7 +138,7 @@ pub async fn start_router() -> RouterHandle {
 
     // Wait for the router to be ready.
     // Wait for the peer to signal that it's ready.
-    let mut stdout = BufReader::new(router.stdout().as_mut().unwrap()).lines();
+    let mut stdout = BufReader::new(router.stdout.as_mut().unwrap()).lines();
 
     loop {
         match stdout.next_line().await {
