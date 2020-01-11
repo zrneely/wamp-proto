@@ -5,3 +5,4 @@ package-lock.json
 Cargo.lock
 *.swp
 rls
+*.log

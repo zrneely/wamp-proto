@@ -1,29 +1,48 @@
 use std::collections::HashMap;
 
-use {GlobalScope, Id, RouterScope, SessionScope, TransportableValue, Uri};
+use crate::{transport::TransportableValue, uri::Uri, GlobalScope, Id, RouterScope, SessionScope};
 
 /// Raw message codes for each message type.
 #[allow(missing_docs)]
-mod msg_code {
+pub(in crate) mod msg_code {
     pub const HELLO: u64 = 1;
     pub const WELCOME: u64 = 2;
     pub const ABORT: u64 = 3;
     pub const GOODBYE: u64 = 6;
     pub const ERROR: u64 = 8;
+
+    #[cfg(feature = "publisher")]
     pub const PUBLISH: u64 = 16;
+    #[cfg(feature = "publisher")]
     pub const PUBLISHED: u64 = 17;
+
+    #[cfg(feature = "subscriber")]
     pub const SUBSCRIBE: u64 = 32;
+    #[cfg(feature = "subscriber")]
     pub const SUBSCRIBED: u64 = 33;
+    #[cfg(feature = "subscriber")]
     pub const UNSUBSCRIBE: u64 = 34;
+    #[cfg(feature = "subscriber")]
     pub const UNSUBSCRIBED: u64 = 35;
+    #[cfg(feature = "subscriber")]
     pub const EVENT: u64 = 36;
+
+    #[cfg(feature = "caller")]
     pub const CALL: u64 = 48;
+    #[cfg(feature = "caller")]
     pub const RESULT: u64 = 50;
+
+    #[cfg(feature = "callee")]
     pub const REGISTER: u64 = 64;
+    #[cfg(feature = "callee")]
     pub const REGISTERED: u64 = 65;
+    #[cfg(feature = "callee")]
     pub const UNREGISTER: u64 = 66;
+    #[cfg(feature = "callee")]
     pub const UNREGISTERED: u64 = 67;
+    #[cfg(feature = "callee")]
     pub const INVOCATION: u64 = 68;
+    #[cfg(feature = "callee")]
     pub const YIELD: u64 = 70;
 }
 
@@ -66,6 +85,14 @@ pub enum TxMessage {
         arguments: Option<List>,
         /// A dictionary of key-value data.
         arguments_kw: Option<Dict>,
+    },
+
+    /// Sent in response to a protocol error.
+    Abort {
+        /// Allow providing optional, additional information.
+        details: Dict,
+        /// A somewhat known URI describing why the session is being aborted.
+        reason: Uri,
     },
 
     /// Sent by publishers to brokers when they have a message to send.
@@ -163,6 +190,7 @@ impl TxMessage {
             Hello { .. } => msg_code::HELLO,
             Goodbye { .. } => msg_code::GOODBYE,
             Error { .. } => msg_code::ERROR,
+            Abort { .. } => msg_code::ABORT,
 
             #[cfg(feature = "publisher")]
             Publish { .. } => msg_code::PUBLISH,
@@ -189,6 +217,7 @@ impl TxMessage {
 
     /// Converts this message to a JSON representation.
     // TODO: UT for this (ugh)
+    // TODO: move this to transport/websocket.rs
     #[cfg(feature = "serde_json")]
     pub fn to_json(&self) -> serde_json::Value {
         use TxMessage::*;
@@ -199,6 +228,11 @@ impl TxMessage {
                 ref realm,
                 ref details,
             } => json!([code, realm, details]),
+
+            Abort {
+                ref details,
+                ref reason,
+            } => json!([code, details, reason]),
 
             Goodbye {
                 ref details,
@@ -322,7 +356,6 @@ impl TxMessage {
 ///
 /// [the WAMP protocol specification]: http://wamp-proto.org/spec/
 #[allow(missing_docs)]
-// TODO: convert to enum
 pub mod rx {
     use super::*;
 
@@ -332,14 +365,43 @@ pub mod rx {
             pub struct $name {
                 $($fields)*
             }
-            impl RxMessage for $name {
+            impl ReceivedMessage for $name {
                 const MSG_CODE: u64 = msg_code::$code_name;
             }
         };
     }
 
+    #[derive(Debug)]
+    #[cfg_attr(test, derive(PartialEq, Eq))]
+    pub enum RxMessage {
+        Welcome(Welcome),
+        Abort(Abort),
+        Goodbye(Goodbye),
+        Error(Error),
+
+        #[cfg(feature = "subscriber")]
+        Subscribed(Subscribed),
+        #[cfg(feature = "subscriber")]
+        Unsubscribed(Unsubscribed),
+        #[cfg(feature = "subscriber")]
+        Event(Event),
+
+        #[cfg(feature = "publisher")]
+        Published(Published),
+
+        #[cfg(feature = "callee")]
+        Registered(Registered),
+        #[cfg(feature = "callee")]
+        Unregistered(Unregistered),
+        #[cfg(feature = "callee")]
+        Invocation(Invocation),
+
+        #[cfg(feature = "caller")]
+        Result(Result),
+    }
+
     /// Marker trait for received messages. Do not implement this yourself.
-    pub trait RxMessage {
+    pub trait ReceivedMessage {
         /// The identifying integer for this message.
         const MSG_CODE: u64;
     }

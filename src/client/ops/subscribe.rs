@@ -1,224 +1,171 @@
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Instant;
+use std::task::{Context, Poll};
 
-use failure::Error;
-use futures::{sync::oneshot, Async, AsyncSink, Future};
-use tokio::timer::Delay;
+use futures::{
+    future::{poll_fn, select},
+    pin_mut, select, FutureExt, Sink, Stream,
+};
+use tokio::sync::oneshot;
 
-use client::{Broadcast, Client, ClientState, ClientTaskTracker};
-use error::WampError;
-use pollable::PollableValue;
-use proto::TxMessage;
-use {Id, ReceivedValues, RouterScope, SessionScope, Transport, Uri};
+use crate::{
+    client::{
+        watch_for_client_state_change, Broadcast, Client, ClientTaskTracker, SubscriptionStream,
+    },
+    error::WampError,
+    pollable::PollableSet,
+    proto::TxMessage,
+    transport::Transport,
+    uri::Uri,
+    Id, MessageBuffer, RouterScope, SessionScope,
+};
 
-// The future (task) that listens for new events published to a channel we're
-// subscribed to.
-struct SubscriptionListener<F, R>
-where
-    F: Fn(Broadcast) -> R + Send + 'static,
-    R: Future<Item = (), Error = Error> + Send + 'static,
-{
-    values: ReceivedValues,
-    stop_receiver: oneshot::Receiver<()>,
-    subscription_id: Id<RouterScope>,
-    handler: F,
-}
-impl<F, R> Future for SubscriptionListener<F, R>
-where
-    F: Fn(Broadcast) -> R + Send + 'static,
-    R: Future<Item = (), Error = Error> + Send + 'static,
-{
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
-        trace!("SubscriptionListener wakeup");
-        loop {
-            match self.stop_receiver.poll() {
-                // We haven't been told to stop
-                Ok(Async::NotReady) => {}
-                // Either we've been told to stop, or the sender was dropped, in
-                // which case we should stop anyway.
-                Ok(Async::Ready(_)) | Err(_) => {
-                    debug!("SubscriptionListener told to stop!");
-                    return Ok(Async::Ready(()));
-                }
-            }
-
-            let poll_result = self
-                .values
-                .event
-                .lock()
-                .poll_take(|evt| evt.subscription == self.subscription_id);
-            match poll_result {
-                Async::Ready(event) => {
-                    info!(
-                        "Subscription {:?} received event: {:?}",
-                        self.subscription_id, event
-                    );
-
-                    // Spawn the event handler on its own task. We can't do it as a part of this function,
-                    // or handler-produced futures will stop executing if the subscription is cancelled.
-                    tokio::spawn(
-                        (self.handler)(Broadcast {
-                            arguments: event.arguments.unwrap_or_else(Vec::new),
-                            arguments_kw: event.arguments_kw.unwrap_or_else(HashMap::new),
-                        }).map_err(|err| {
-                            warn!("Event handler produced error: {:?}", err);
-                            ()
-                        }),
-                    );
-                }
-
-                // Nothing available yet
-                Async::NotReady => return Ok(Async::NotReady),
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-enum SubscriptionFutureState {
-    StartSendSubscribe(Option<TxMessage>),
-    SendSubscribe,
-    WaitSubscribed,
-}
-
-/// A future representing a completed subscription.
-pub(in client) struct SubscriptionFuture<T, F, R>
-where
-    T: Transport,
-    F: Fn(Broadcast) -> R + Send + 'static,
-    R: Future<Item = (), Error = Error> + Send + 'static,
-{
-    state: SubscriptionFutureState,
-
-    topic: Uri,
-    handler: Option<F>,
-    request_id: Id<SessionScope>,
-    timeout: Delay,
-
-    received: ReceivedValues,
-    client_state: PollableValue<ClientState>,
+async fn subscribe_impl<T: Transport>(
     task_tracker: Arc<ClientTaskTracker<T>>,
-}
-impl<T, F, R> SubscriptionFuture<T, F, R>
-where
-    T: Transport,
-    F: Fn(Broadcast) -> R + Send + 'static,
-    R: Future<Item = (), Error = Error> + Send + 'static,
-{
-    pub fn new(client: &Client<T>, topic: Uri, handler: F) -> Self {
-        let request_id = Id::<SessionScope>::next();
-        SubscriptionFuture {
-            state: SubscriptionFutureState::StartSendSubscribe(Some(TxMessage::Subscribe {
+    topic: Uri,
+    received: Arc<MessageBuffer>,
+) -> Result<impl SubscriptionStream, WampError> {
+    let request_id = Id::<SessionScope>::next();
+
+    {
+        let mut sender = task_tracker.get_sender().lock().await;
+        poll_fn(|cx| Pin::new(&mut *sender).poll_ready(cx))
+            .await
+            .map_err(|error| WampError::WaitForReadyToSendFailed {
+                message_type: "SUBSCRIBE",
+                error,
+            })?;
+        Pin::new(&mut *sender)
+            .start_send(TxMessage::Subscribe {
                 topic: topic.clone(),
                 request: request_id,
-                options: HashMap::new(),
-            })),
+                options: HashMap::default(),
+            })
+            .map_err(|error| WampError::MessageSendFailed {
+                message_type: "SUBSCRIBE",
+                error,
+            })?;
+    }
 
-            topic,
-            request_id,
-            handler: Some(handler),
-            timeout: Delay::new(Instant::now() + client.timeout_duration),
+    {
+        let mut sender = task_tracker.get_sender().lock().await;
+        poll_fn(|cx| Pin::new(&mut *sender).poll_flush(cx))
+            .await
+            .map_err(|error| WampError::SinkFlushFailed {
+                message_type: "SUBSCRIBE",
+                error,
+            })?;
+    }
 
-            received: client.received.clone(),
-            client_state: client.state.clone(),
-            task_tracker: client.task_tracker.clone(),
+    // Wait for a SUBSCRIBED or ERROR message.
+    let subscribed_msg = poll_fn(|cx| {
+        received
+            .subscribed
+            .poll_take(cx, |msg| msg.request == request_id)
+    })
+    .fuse();
+    let error_msg = poll_fn(|cx| {
+        received
+            .errors
+            .subscribe
+            .poll_take(cx, |msg| msg.request == request_id)
+    })
+    .fuse();
+
+    pin_mut!(subscribed_msg, error_msg);
+    select! {
+        msg = subscribed_msg => {
+            info!("Subscribed to {:?} (ID: {:?})", topic, msg.subscription);
+            let (sender, receiver) = oneshot::channel();
+
+            let subscription_stream = SubscriptionStreamImpl {
+                values: received.clone(),
+                stop_receiver: receiver,
+                subscription_id: msg.subscription,
+            };
+
+            // Create an EVENT queue for our subscription, and allow
+            // the client to stop the stream.
+            received
+                .event
+                .write()
+                .insert(msg.subscription, PollableSet::default());
+            task_tracker.track_subscription(msg.subscription, sender);
+
+            Ok(subscription_stream)
+        }
+        msg = error_msg => {
+            Err(WampError::ErrorReceived {
+                error: msg.error,
+                request_type: msg.request_type,
+                request_id: msg.request,
+            })
         }
     }
 }
-impl<T, F, R> Future for SubscriptionFuture<T, F, R>
-where
-    T: Transport,
-    F: Fn(Broadcast) -> R + Send + 'static,
-    R: Future<Item = (), Error = Error> + Send + 'static,
-{
-    type Item = Id<RouterScope>;
-    type Error = Error;
 
-    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
-        loop {
-            trace!("SubscriptionFuture: {:?}", self.state);
-            ::client::check_for_timeout(&mut self.timeout)?;
+pub(in crate::client) async fn subscribe<T: Transport>(
+    client: &Client<T>,
+    topic: Uri,
+) -> Result<impl SubscriptionStream, WampError> {
+    let wfcsc =
+        watch_for_client_state_change(client.state.clone(), |state| state.is_established()).fuse();
+    let si = subscribe_impl(client.task_tracker.clone(), topic, client.received.clone()).fuse();
 
-            match self.client_state.read(true) {
-                ClientState::Established => {}
-                ref state => {
-                    warn!(
-                        "SubscriptionFuture with unexpected client state {:?}",
-                        state
-                    );
-                    return Err(WampError::InvalidClientState.into());
-                }
+    pin_mut!(wfcsc, si);
+    select(wfcsc, si).await.factor_first().0
+}
+
+struct SubscriptionStreamImpl {
+    values: Arc<MessageBuffer>,
+    stop_receiver: oneshot::Receiver<()>,
+    subscription_id: Id<RouterScope>,
+}
+impl SubscriptionStream for SubscriptionStreamImpl {
+    fn get_subscription_id(&self) -> Id<RouterScope> {
+        self.subscription_id
+    }
+}
+impl Stream for SubscriptionStreamImpl {
+    type Item = Broadcast;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Broadcast>> {
+        trace!("SubscriptionStream wakeup");
+
+        match self.stop_receiver.poll_unpin(cx) {
+            Poll::Pending => {}
+            // Either we've been told to stop or the sender was dropped,
+            // in which case we should stop anyway.
+            Poll::Ready(Ok(())) => {
+                debug!("SubscriptionStream told to stop!");
+                return Poll::Ready(None);
             }
-
-            let mut pending = false;
-            self.state = match self.state {
-                // Step 1: Add the subscription request to the sender's message queue. If the queue
-                // is full, return NotReady.
-                SubscriptionFutureState::StartSendSubscribe(ref mut message) => {
-                    let message = message.take().expect("invalid SubscriptionFutureState");
-                    match self.task_tracker.get_sender().lock().start_send(message)? {
-                        AsyncSink::NotReady(message) => {
-                            pending = true;
-                            SubscriptionFutureState::StartSendSubscribe(Some(message))
-                        }
-                        AsyncSink::Ready => SubscriptionFutureState::SendSubscribe,
-                    }
-                }
-
-                // Step 2: Wait for the sender's message queue to empty. If it's not empty, return
-                // NotReady.
-                SubscriptionFutureState::SendSubscribe => {
-                    match self.task_tracker.get_sender().lock().poll_complete()? {
-                        Async::NotReady => {
-                            pending = true;
-                            SubscriptionFutureState::SendSubscribe
-                        }
-                        Async::Ready(_) => SubscriptionFutureState::WaitSubscribed,
-                    }
-                }
-
-                // Step 3: Wait for a rx::Welcome from the receiver. If we haven't yet received
-                // one, return NotReady. Through the magic of PollableSet, the current
-                // task will be notified when a new Subscribed message arrives.
-                SubscriptionFutureState::WaitSubscribed => match self
-                    .received
-                    .subscribed
-                    .lock()
-                    .poll_take(|msg| msg.request == self.request_id)
-                {
-                    Async::NotReady => {
-                        pending = true;
-                        SubscriptionFutureState::WaitSubscribed
-                    }
-                    Async::Ready(msg) => {
-                        let (sender, receiver) = oneshot::channel();
-
-                        let listener = SubscriptionListener {
-                            values: self.received.clone(),
-                            stop_receiver: receiver,
-                            subscription_id: msg.subscription,
-                            handler: self.handler.take().unwrap(),
-                        };
-                        tokio::spawn(listener);
-
-                        info!(
-                            "Subscribed to {:?} (ID: {:?})",
-                            self.topic, msg.subscription
-                        );
-                        self.task_tracker
-                            .track_subscription(msg.subscription, sender);
-                        return Ok(Async::Ready(msg.subscription));
-                    }
-                },
-            };
-
-            if pending {
-                return Ok(Async::NotReady);
+            Poll::Ready(Err(err)) => {
+                error!("SubscriptionStream stop listener broken: {}", err);
+                return Poll::Ready(None);
             }
+        }
+
+        match self
+            .values
+            .event
+            .read()
+            .get(&self.subscription_id)
+            .map(|queue| queue.poll_take_any(cx))
+        {
+            None => {
+                error!(
+                    "EVENT queue map is missing entry for subscription ID {:?}",
+                    self.subscription_id
+                );
+                Poll::Ready(None)
+            }
+            Some(Poll::Pending) => Poll::Pending,
+            Some(Poll::Ready(message)) => Poll::Ready(Some(Broadcast {
+                arguments: message.arguments.unwrap_or_default(),
+                arguments_kw: message.arguments_kw.unwrap_or_default(),
+            })),
         }
     }
 }

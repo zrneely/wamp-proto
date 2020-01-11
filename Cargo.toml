@@ -2,27 +2,31 @@
 name = "wamp-proto"
 version = "0.1.0"
 authors = ["Zachary Neely <zrussellneely@gmail.com>"]
+edition = "2018"
 
 [dependencies]
+async-trait = "0.1"
 failure = "0.1"
 failure_derive = "0.1"
-futures = "0.1"
-http = "0.1"
+futures = { version = "0.3", features = ["async-await"] }
 lazy_static = "1"
 log = "0.4"
-parking_lot = "0.7"
-rand = "0.6"
+parking_lot = "0.9"
+rand = "0.7"
 regex = "1"
 serde = "1"
 serde_derive = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
-tokio = "0.1"
-websocket = { git = "https://github.com/enzious/rust-websocket.git", optional = true }
+tokio = { version = "0.2", features = ["sync", "tcp"] }
+#tungstenite = { version = "0.9", optional = true }
+tokio-tungstenite = { git = "https://github.com/snapview/tokio-tungstenite", branch = "master", optional = true }
+url = "2"
 
 [dev_dependencies]
 env_logger = "0.6"
-tokio-process = "0.2"
 uuid = { version = "0.7", features = ["v4"] }
+tokio = { version = "0.2", features = ["process", "rt-core", "macros", "time", "io-util"] }
+tempfile = "3"
 
 [features]
 default = ["callee", "caller", "publisher", "subscriber", "ws_transport"]
@@ -30,4 +34,4 @@ callee = []
 caller = []
 publisher = []
 subscriber = []
-ws_transport = ["websocket", "serde_json", "serde_derive"]
+ws_transport = ["tokio-tungstenite", "serde_json", "serde_derive"]
