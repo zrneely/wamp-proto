@@ -54,20 +54,28 @@ impl Sink<TxMessage> for WampSinkAdapter {
     type Error = Error;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
-        self.sink.poll_ready(cx).map_err(|err| err.into())
+        Pin::new(&mut self.sink)
+            .poll_ready(cx)
+            .map_err(|err| err.into())
     }
 
     fn start_send(mut self: Pin<&mut Self>, item: TxMessage) -> Result<(), Error> {
         let message = Message::text(serde_json::to_string(&item.to_json())?);
-        self.sink.start_send(message).map_err(|err| err.into())
+        Pin::new(&mut self.sink)
+            .start_send(message)
+            .map_err(|err| err.into())
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
-        self.sink.poll_flush(cx).map_err(|err| err.into())
+        Pin::new(&mut self.sink)
+            .poll_flush(cx)
+            .map_err(|err| err.into())
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
-        self.sink.poll_close(cx).map_err(|err| err.into())
+        Pin::new(&mut self.sink)
+            .poll_close(cx)
+            .map_err(|err| err.into())
     }
 }
 
@@ -83,7 +91,7 @@ impl Stream for WampStreamAdapter {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RxMessage, TransportError>>> {
         loop {
-            match self.stream.poll_next(cx) {
+            match Pin::new(&mut self.stream).poll_next(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Ready(Some(Err(error))) => {

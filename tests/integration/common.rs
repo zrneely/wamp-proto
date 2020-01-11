@@ -6,45 +6,36 @@
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::Poll;
 
-use futures::pin_mut;
-use tokio::{
-    codec::{FramedRead, LinesCodec},
-    net::process,
-    prelude::*,
-};
+use tokio::{io::BufReader, prelude::*, process};
 use uuid::prelude::*;
 
 pub const TEST_REALM: &str = "wamp_proto_test";
 
 pub struct PeerHandle {
     _peer: process::Child,
-    stdout: Pin<Box<FramedRead<process::ChildStdout, LinesCodec>>>,
+    stdout: tokio::io::Lines<BufReader<process::ChildStdout>>,
     panic_on_drop: bool,
 }
 impl PeerHandle {
     pub async fn wait_for_test_complete(mut self) -> Result<(), ()> {
         self.panic_on_drop = false;
 
-        tokio::future::poll_fn(|cx| match self.stdout.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok(line))) => {
-                if line.contains("test passed") {
-                    Poll::Ready(Ok(()))
-                } else if line.contains("test failed") {
-                    Poll::Ready(Err(()))
-                } else {
-                    Poll::Pending
+        loop {
+            match self.stdout.next_line().await {
+                Ok(Some(line)) if line.contains("test passed") => {
+                    return Ok(());
                 }
+                Ok(Some(line)) if line.contains("test failed") => {
+                    return Err(());
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(()),
+                Err(_) => return Err(()),
             }
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(None) => Poll::Ready(Err(())),
-            Poll::Ready(Some(Err(_))) => Poll::Ready(Err(())),
-        })
-        .await
+        }
     }
 }
 
@@ -77,32 +68,16 @@ pub async fn start_peer<T: AsRef<Path>>(
         .expect("could not start python");
 
     // Wait for the peer to signal that it's ready.
-    {
-        let stdout = FramedRead::new(
-            peer.stdout().as_mut().unwrap(),
-            LinesCodec::new_with_max_length(1024),
-        );
+    let mut stdout = BufReader::new(peer.stdout().take().unwrap()).lines();
 
-        // Wait for the peer to signal that it's ready.
-        let filtered_stdout = stdout.filter_map(|line| {
-            async move {
-                if let Ok(line) = line {
-                    if line.contains("ready") {
-                        return Some(line);
-                    }
-                }
-                None
+    loop {
+        match stdout.next_line().await {
+            Ok(Some(line)) if line.contains("ready") => {
+                break;
             }
-        });
-
-        pin_mut!(filtered_stdout);
-        filtered_stdout.next().await;
+            _ => {}
+        }
     }
-
-    let stdout = Box::pin(FramedRead::new(
-        peer.stdout().take().unwrap(),
-        LinesCodec::new_with_max_length(1024),
-    ));
 
     PeerHandle {
         _peer: peer,
@@ -162,25 +137,19 @@ pub async fn start_router() -> RouterHandle {
     println!("Spawned child process: {}", router.id());
 
     // Wait for the router to be ready.
-    let stdout = FramedRead::new(
-        router.stdout().as_mut().unwrap(),
-        LinesCodec::new_with_max_length(1024),
-    );
-
     // Wait for the peer to signal that it's ready.
-    let filtered_stdout = stdout.filter_map(|line| {
-        async move {
-            if let Ok(line) = line {
-                if line.contains("Ok, local node configuration booted successfully!") {
-                    return Some(line);
-                }
-            }
-            None
-        }
-    });
+    let mut stdout = BufReader::new(router.stdout().as_mut().unwrap()).lines();
 
-    pin_mut!(filtered_stdout);
-    filtered_stdout.next().await;
+    loop {
+        match stdout.next_line().await {
+            Ok(Some(line))
+                if line.contains("Ok, local node configuration booted successfully!") =>
+            {
+                break;
+            }
+            _ => {}
+        }
+    }
 
     println!("Crossbar router ready!");
     RouterHandle {

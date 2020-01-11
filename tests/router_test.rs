@@ -3,7 +3,7 @@ use wamp_proto::{transport::websocket::WebsocketTransport, uri::Uri, Client, Cli
 use std::time::Duration;
 
 use futures::stream::StreamExt as _;
-use tokio::future::FutureExt as _;
+use tokio::time::timeout;
 
 #[tokio::test]
 #[ignore]
@@ -30,9 +30,7 @@ async fn integration_1() {
     });
     tokio::spawn(subscription_future);
 
-    client
-        .wait_for_close()
-        .timeout(Duration::from_secs(60 * 60))
+    timeout(Duration::from_secs(60 * 60), client.wait_for_close())
         .await
         .unwrap();
 }
