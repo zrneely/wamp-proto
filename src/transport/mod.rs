@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use failure::{Error, Fail};
 use futures::{Sink, Stream};
+use serde::{Deserialize, Serialize};
 
 use crate::{rx::RxMessage, TxMessage};
 
@@ -64,7 +65,7 @@ pub trait Transport {
 
 /// The types of value which can be sent over WAMP RPC and pub/sub boundaries.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ws_transport", serde(untagged))]
+#[serde(untagged)]
 pub enum TransportableValue {
     /// A non-negative integer.
     Integer(u64),

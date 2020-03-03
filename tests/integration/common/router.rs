@@ -1,90 +1,12 @@
-//! Helpers and common code for integration tests.
-//! This assumes several things about the current environment:
-//!
-//! * `crossbar` is installed and available on the `PATH`.
-//! * `nodejs` is installed and available on the `PATH`.
-
 use std::fs::{self, File};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tokio::{io::BufReader, prelude::*, process};
 use uuid::prelude::*;
 
-pub const TEST_REALM: &str = "wamp_proto_test";
-
-pub struct PeerHandle {
-    _peer: process::Child,
-    stdout: tokio::io::Lines<BufReader<process::ChildStdout>>,
-    panic_on_drop: bool,
-}
-impl PeerHandle {
-    pub async fn wait_for_test_complete(mut self) -> Result<(), ()> {
-        self.panic_on_drop = false;
-
-        loop {
-            match self.stdout.next_line().await {
-                Ok(Some(line)) if line.contains("test passed") => {
-                    return Ok(());
-                }
-                Ok(Some(line)) if line.contains("test failed") => {
-                    return Err(());
-                }
-                Ok(Some(_)) => {}
-                Ok(None) => return Err(()),
-                Err(_) => return Err(()),
-            }
-        }
-    }
-}
-
-/// Starts the current test module's peer.
-pub async fn start_peer<T: AsRef<Path>>(
-    module: T,
-    test: &str,
-    router: &RouterHandle,
-) -> PeerHandle {
-    let mut peer = process::Command::new("python3")
-        .arg({
-            let mut path = PathBuf::new();
-            path.push(".");
-            path.push("tests");
-            path.push("integration");
-            path.push(module.as_ref());
-            path.push("peer.py");
-            path
-        })
-        .arg(test)
-        .arg(router.get_url())
-        .arg(TEST_REALM)
-        // Tell python to flush stdout after every line
-        .env("PYTHONUNBUFFERED", "1")
-        // Tell python to use UTF-8 for I/O
-        .env("PYTHONIOENCODING", "utf8")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("could not start python");
-
-    // Wait for the peer to signal that it's ready.
-    let mut stdout = BufReader::new(peer.stdout.take().unwrap()).lines();
-
-    loop {
-        match stdout.next_line().await {
-            Ok(Some(line)) if line.contains("ready") => {
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    PeerHandle {
-        _peer: peer,
-        stdout,
-        panic_on_drop: true,
-    }
-}
+use crate::integration::common::TEST_REALM;
 
 /// A handle to a started router; drop to close the router and delete its config dir.
 pub struct RouterHandle {
@@ -130,7 +52,7 @@ pub async fn start_router() -> RouterHandle {
         // Tell python (crossbar) to use UTF-8 for I/O
         .env("PYTHONIOENCODING", "utf8")
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
         .expect("could not run crossbar");
 

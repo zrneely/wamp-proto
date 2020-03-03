@@ -10,17 +10,7 @@
 #![forbid(unsafe_code)]
 
 #[macro_use]
-extern crate failure_derive;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
 extern crate log;
-#[macro_use]
-extern crate serde_derive;
-
-#[cfg(feature = "ws_transport")]
-#[macro_use]
-extern crate serde_json;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -150,7 +140,7 @@ impl Id<SessionScope> {
     /// Note that this will overflow and silently wrap around to 0 after exhausting
     /// [`std::usize::max_value`] IDs. This method is thread-safe.
     pub fn next() -> Self {
-        lazy_static! {
+        lazy_static::lazy_static! {
             static ref NEXT: AtomicUsize = AtomicUsize::new(1);
         }
         Id {
@@ -237,6 +227,7 @@ pub struct MessageBuffer {
 mod tests {
     use super::uri::Uri;
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn id_global_test() {

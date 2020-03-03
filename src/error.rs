@@ -1,4 +1,4 @@
-use failure::Error;
+use failure::{Error, Fail};
 
 use crate::{uri::Uri, Id, SessionScope};
 

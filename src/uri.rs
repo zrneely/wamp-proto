@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::fmt;
 
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 /// The URIs known to WAMP.
 pub mod known_uri {
@@ -97,9 +98,8 @@ pub mod known_uri {
 /// except in the first and last component.
 ///
 /// An example of a well-formed URI is `"org.company.application.service"`.
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
-#[cfg_attr(feature = "ws_transport", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "ws_transport", serde(deny_unknown_fields))]
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Uri(Cow<'static, str>);
 impl Uri {
     /// Constructs a URI from a textual representation, skipping all validation.
@@ -111,7 +111,7 @@ impl Uri {
     ///
     /// Returns `None` if validation fails.
     pub fn relaxed<T: AsRef<str>>(text: T) -> Option<Self> {
-        lazy_static! {
+        lazy_static::lazy_static! {
             // regex taken from WAMP specification
             static ref RE: Regex = Regex::new(r"^([^\s\.#]+\.)*([^\s\.#]+)$").unwrap();
         }
@@ -128,7 +128,7 @@ impl Uri {
     /// Returns `None` if validation fails. A strict validation enforces that URI components only
     /// contain lower-case letters, digits, and "_".
     pub fn strict<T: AsRef<str>>(text: T) -> Option<Self> {
-        lazy_static! {
+        lazy_static::lazy_static! {
             // regex taken from WAMP specification
             static ref RE: Regex = Regex::new(r"^(([0-9a-z_]+\.)|\.)*([0-9a-z_]+)?$").unwrap();
         }

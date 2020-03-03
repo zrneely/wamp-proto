@@ -15,6 +15,8 @@ async fn publish_one_message() {
     let router = start_router().await;
     let url = router.get_url();
 
+    println!("Crossbar running at: {}", url);
+
     let peer = start_peer("publish", "publishOneMessage", &router).await;
 
     let client_config = ClientConfig::new(&url, Uri::strict(TEST_REALM).unwrap());

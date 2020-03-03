@@ -14,7 +14,6 @@ use tokio_tungstenite::{
     tungstenite::{handshake::client::Request, protocol::Message},
     WebSocketStream,
 };
-use url::Url;
 
 use crate::{
     proto::{rx::RxMessage, TxMessage},
@@ -29,15 +28,10 @@ impl Transport for WebsocketTransport {
     type Stream = WampStreamAdapter;
 
     async fn connect(url: &str) -> Result<(WampSinkAdapter, WampStreamAdapter), Error> {
-        let url = Url::parse(url)?;
-        let request = {
-            let mut request = Request {
-                url,
-                extra_headers: None,
-            };
-            request.add_protocol("wamp.2.json".into());
-            request
-        };
+        let request = Request::builder()
+            .header("Sec-Websocket-Protocol", "wamp.2.json")
+            .uri(url)
+            .body(())?;
 
         let (wss, _) = tokio_tungstenite::connect_async(request).await?;
         let (sink, stream) = wss.split();

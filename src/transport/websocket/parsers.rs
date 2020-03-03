@@ -99,6 +99,7 @@ mod helpers {
     mod tests {
         use super::*;
         use crate::GlobalScope;
+        use serde_json::json;
 
         #[test]
         fn json_to_tv_test() {
@@ -448,6 +449,7 @@ fn parse_event(msg: &[Value]) -> Result<rx::Event, MessageParseError> {
 mod tests {
     use super::*;
     use crate::{GlobalScope, RouterScope, SessionScope};
+    use serde_json::json;
 
     #[test]
     fn parse_mssage_test() {

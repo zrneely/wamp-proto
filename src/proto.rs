@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use serde_json::json;
+
 use crate::{transport::TransportableValue, uri::Uri, GlobalScope, Id, RouterScope, SessionScope};
 
 /// Raw message codes for each message type.
