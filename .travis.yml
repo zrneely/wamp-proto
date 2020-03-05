@@ -1,9 +1,9 @@
-sudo: false
 language: rust
 rust:
   - stable
   - beta
   - nightly
+os: linux
 dist: xenial
 
 jobs:
@@ -13,10 +13,10 @@ jobs:
 
 before_install:
   - export PATH=$HOME/.local/bin:$PATH
-  - pip3 install wheel msgpack
-  - pip3 install --user crossbar==19.10.1 autobahn==19.10.1
   - pip3 --version
   - python3 --version
+  - pip3 install wheel msgpack
+  - pip3 install --user crossbar==19.10.1 autobahn==19.10.1
 
 addons:
   apt:

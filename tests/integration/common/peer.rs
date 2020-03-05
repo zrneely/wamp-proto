@@ -3,23 +3,7 @@ use std::process::Stdio;
 
 use tokio::{io::BufReader, prelude::*, process};
 
-use crate::integration::common::{router::RouterHandle, TEST_REALM};
-
-struct Tee<T: AsyncRead + Unpin> {
-    name: &'static str,
-    inner: tokio::io::Lines<BufReader<T>>,
-}
-impl<T: AsyncRead + Unpin> Tee<T> {
-    async fn next_line(&mut self) -> tokio::io::Result<Option<String>> {
-        match self.inner.next_line().await {
-            Ok(Some(text)) => {
-                println!("{}: {}", self.name, text);
-                Ok(Some(text))
-            }
-            t => t,
-        }
-    }
-}
+use crate::integration::common::{router::RouterHandle, Tee, TEST_REALM};
 
 pub struct PeerHandle {
     stdout: Tee<process::ChildStdout>,
@@ -89,7 +73,7 @@ pub async fn start_peer<T: AsRef<Path>>(
         .spawn()
         .expect("could not start python");
 
-    println!("Started peer python");
+    println!("Started peer python: {}", peer.id());
 
     // Wait for the peer to signal that it's ready.
     let mut stdout = Tee {
